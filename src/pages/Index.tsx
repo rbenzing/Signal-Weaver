@@ -19,7 +19,34 @@ const Index = () => {
   const [mode, setMode] = useState('FM');
   const [isTxMode, setIsTxMode] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
-  const [isActive, setIsActive] = useState(true);
+  const [isActive, setIsActive] = useState(false);
+  const [isConnected, setIsConnected] = useState(false);
+  
+  // Real SDR data - will be populated when device connects
+  const [spectrumData, setSpectrumData] = useState<number[]>([]);
+  const [signalStrength, setSignalStrength] = useState(-100);
+  const [peakHold, setPeakHold] = useState(-100);
+  const [serialNumber, setSerialNumber] = useState<string>();
+  const [firmwareVersion, setFirmwareVersion] = useState<string>();
+
+  const handleConnect = async () => {
+    // This will be replaced with actual WebSerial/WebUSB connection logic
+    // For now, it shows the intent for real device connection
+    try {
+      // Check if WebSerial is available
+      if ('serial' in navigator) {
+        // Request port access
+        // const port = await (navigator as any).serial.requestPort();
+        // await port.open({ baudRate: 115200 });
+        // setIsConnected(true);
+        console.log('WebSerial available - implement device connection');
+      } else {
+        console.log('WebSerial not supported in this browser');
+      }
+    } catch (error) {
+      console.error('Failed to connect:', error);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-background p-2 flex flex-col gap-2">
@@ -55,11 +82,17 @@ const Index = () => {
       <div className="flex-1 grid grid-cols-12 gap-2">
         {/* Left sidebar - Controls */}
         <div className="col-span-3 flex flex-col gap-2">
-          <DeviceStatus isConnected={true} />
+          <DeviceStatus 
+            isConnected={isConnected} 
+            serialNumber={serialNumber}
+            firmwareVersion={firmwareVersion}
+            onConnect={handleConnect}
+          />
           <TransceiverControl
             isTxMode={isTxMode}
             isRecording={isRecording}
             isActive={isActive}
+            isConnected={isConnected}
             onTxToggle={() => setIsTxMode(!isTxMode)}
             onRecordToggle={() => setIsRecording(!isRecording)}
             onActiveToggle={() => setIsActive(!isActive)}
@@ -79,13 +112,18 @@ const Index = () => {
           <SpectrumDisplay
             centerFreq={frequency}
             bandwidth={sampleRate}
-            isActive={isActive}
+            isActive={isActive && isConnected}
+            spectrumData={spectrumData}
           />
         </div>
 
         {/* Right sidebar - Meters and Gains */}
         <div className="col-span-3 flex flex-col gap-2">
-          <SignalMeter isActive={isActive} />
+          <SignalMeter 
+            isActive={isActive && isConnected} 
+            signalStrength={signalStrength}
+            peakHold={peakHold}
+          />
           <GainControls
             lnaGain={lnaGain}
             vgaGain={vgaGain}
@@ -113,15 +151,24 @@ const Index = () => {
         </div>
         
         <div className="flex items-center gap-4">
-          <span className={`flex items-center gap-1 ${isTxMode ? 'text-warning' : 'text-accent'}`}>
-            <span className={`w-2 h-2 rounded-full ${isTxMode ? 'bg-warning animate-pulse' : 'bg-accent'}`} />
-            {isTxMode ? 'TRANSMIT' : 'RECEIVE'}
-          </span>
-          {isRecording && (
-            <span className="flex items-center gap-1 text-destructive">
-              <span className="w-2 h-2 rounded-full bg-destructive animate-pulse" />
-              REC
+          {!isConnected ? (
+            <span className="flex items-center gap-1 text-muted-foreground">
+              <span className="w-2 h-2 rounded-full bg-muted" />
+              NO DEVICE
             </span>
+          ) : (
+            <>
+              <span className={`flex items-center gap-1 ${isTxMode ? 'text-warning' : 'text-accent'}`}>
+                <span className={`w-2 h-2 rounded-full ${isTxMode ? 'bg-warning animate-pulse' : 'bg-accent'}`} />
+                {isTxMode ? 'TRANSMIT' : 'RECEIVE'}
+              </span>
+              {isRecording && (
+                <span className="flex items-center gap-1 text-destructive">
+                  <span className="w-2 h-2 rounded-full bg-destructive animate-pulse" />
+                  REC
+                </span>
+              )}
+            </>
           )}
         </div>
       </footer>

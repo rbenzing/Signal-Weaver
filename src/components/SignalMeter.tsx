@@ -1,37 +1,15 @@
-import { useEffect, useState } from 'react';
-
 interface SignalMeterProps {
   isActive: boolean;
+  signalStrength?: number;
+  peakHold?: number;
 }
 
-const SignalMeter = ({ isActive }: SignalMeterProps) => {
-  const [signalStrength, setSignalStrength] = useState(-80);
-  const [peakHold, setPeakHold] = useState(-80);
-
-  useEffect(() => {
-    if (!isActive) return;
-
-    const interval = setInterval(() => {
-      const newStrength = -90 + Math.random() * 50 + Math.sin(Date.now() / 1000) * 10;
-      setSignalStrength(newStrength);
-      
-      if (newStrength > peakHold) {
-        setPeakHold(newStrength);
-      }
-    }, 100);
-
-    const peakDecay = setInterval(() => {
-      setPeakHold((prev) => Math.max(prev - 0.5, signalStrength));
-    }, 500);
-
-    return () => {
-      clearInterval(interval);
-      clearInterval(peakDecay);
-    };
-  }, [isActive, signalStrength, peakHold]);
-
-  const normalizedSignal = Math.max(0, Math.min(100, (signalStrength + 100) * 1.25));
-  const normalizedPeak = Math.max(0, Math.min(100, (peakHold + 100) * 1.25));
+const SignalMeter = ({ isActive, signalStrength = -100, peakHold = -100 }: SignalMeterProps) => {
+  const displayStrength = isActive ? signalStrength : -100;
+  const displayPeak = isActive ? peakHold : -100;
+  
+  const normalizedSignal = Math.max(0, Math.min(100, (displayStrength + 100) * 1.25));
+  const normalizedPeak = Math.max(0, Math.min(100, (displayPeak + 100) * 1.25));
 
   const getColor = (value: number) => {
     if (value > 75) return 'hsl(0, 100%, 50%)';
@@ -48,21 +26,21 @@ const SignalMeter = ({ isActive }: SignalMeterProps) => {
         <div className="flex gap-0.5">
           {[...Array(20)].map((_, i) => {
             const threshold = i * 5;
-            const isActive = normalizedSignal > threshold;
+            const barActive = normalizedSignal > threshold;
             const isPeak = Math.abs(normalizedPeak - threshold) < 5;
             
             return (
               <div
                 key={i}
                 className={`h-6 flex-1 rounded-sm transition-all duration-75 ${
-                  isActive || isPeak
+                  barActive || isPeak
                     ? ''
                     : 'bg-secondary'
                 }`}
                 style={{
-                  backgroundColor: isActive ? getColor(threshold) : isPeak ? getColor(normalizedPeak) : undefined,
-                  boxShadow: isActive ? `0 0 8px ${getColor(threshold)}` : undefined,
-                  opacity: isPeak && !isActive ? 0.5 : 1,
+                  backgroundColor: barActive ? getColor(threshold) : isPeak ? getColor(normalizedPeak) : undefined,
+                  boxShadow: barActive ? `0 0 8px ${getColor(threshold)}` : undefined,
+                  opacity: isPeak && !barActive ? 0.5 : 1,
                 }}
               />
             );
@@ -85,19 +63,19 @@ const SignalMeter = ({ isActive }: SignalMeterProps) => {
           <div className="text-center">
             <div className="text-[10px] text-muted-foreground uppercase">Signal</div>
             <div className="text-lg font-bold text-primary font-display">
-              {signalStrength.toFixed(1)} dB
+              {isActive ? displayStrength.toFixed(1) : '---'} dB
             </div>
           </div>
           <div className="text-center">
             <div className="text-[10px] text-muted-foreground uppercase">Peak</div>
             <div className="text-lg font-bold text-accent font-display">
-              {peakHold.toFixed(1)} dB
+              {isActive ? displayPeak.toFixed(1) : '---'} dB
             </div>
           </div>
           <div className="text-center">
             <div className="text-[10px] text-muted-foreground uppercase">SNR</div>
             <div className="text-lg font-bold text-secondary-foreground font-display">
-              {(signalStrength + 90).toFixed(1)} dB
+              {isActive ? (displayStrength + 90).toFixed(1) : '---'} dB
             </div>
           </div>
         </div>

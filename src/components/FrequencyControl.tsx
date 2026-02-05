@@ -42,14 +42,14 @@ const FrequencyControl = ({ frequency, onChange }: FrequencyControlProps) => {
     <div className="panel">
       <div className="panel-header">Frequency</div>
       
-      <div className="flex items-center justify-center gap-0.5 py-4">
+      <div className="flex items-center justify-center gap-1 py-4">
         {digits.map((digit, index) => {
           const isDecimal = digit === '.';
           
           return (
             <div
               key={index}
-              className={`relative ${isDecimal ? 'w-3' : 'w-8'} ${!isDecimal ? 'group cursor-pointer' : ''}`}
+              className={`relative ${isDecimal ? 'w-2' : 'w-7'} ${!isDecimal ? 'group cursor-pointer' : ''}`}
               onMouseEnter={() => !isDecimal && setActiveDigit(index)}
               onMouseLeave={() => setActiveDigit(null)}
             >
@@ -63,7 +63,7 @@ const FrequencyControl = ({ frequency, onChange }: FrequencyControlProps) => {
               )}
               
               <span
-                className={`frequency-display text-3xl block text-center ${
+                className={`frequency-display text-2xl block text-center ${
                   !isDecimal && activeDigit === index ? 'text-accent' : ''
                 }`}
               >
@@ -81,7 +81,7 @@ const FrequencyControl = ({ frequency, onChange }: FrequencyControlProps) => {
             </div>
           );
         })}
-        <span className="text-lg text-muted-foreground ml-2 font-display">Hz</span>
+        <span className="text-sm text-muted-foreground ml-2 font-display">Hz</span>
       </div>
 
       {/* Quick frequency buttons */}
