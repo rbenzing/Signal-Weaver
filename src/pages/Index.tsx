@@ -7,6 +7,8 @@ import SampleRateControl from '@/components/SampleRateControl';
 import SignalMeter from '@/components/SignalMeter';
 import TransceiverControl from '@/components/TransceiverControl';
 import DeviceStatus from '@/components/DeviceStatus';
+import VolumeControl from '@/components/VolumeControl';
+import SettingsDialog from '@/components/SettingsDialog';
 import { Settings, Antenna, Save, FolderOpen, HelpCircle } from 'lucide-react';
 
 const Index = () => {
@@ -21,6 +23,19 @@ const Index = () => {
   const [isRecording, setIsRecording] = useState(false);
   const [isActive, setIsActive] = useState(false);
   const [isConnected, setIsConnected] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  
+  // Audio controls
+  const [volume, setVolume] = useState(75);
+  const [isMuted, setIsMuted] = useState(false);
+  const [audioSettings, setAudioSettings] = useState({
+    outputDevice: 'default',
+    sampleRate: 48000,
+    bufferSize: 1024,
+    agcEnabled: true,
+    noiseBlanker: false,
+    squelchLevel: -80,
+  });
   
   // Real SDR data - will be populated when device connects
   const [spectrumData, setSpectrumData] = useState<number[]>([]);
@@ -69,13 +84,23 @@ const Index = () => {
           <button className="p-2 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-sm transition-colors">
             <Save className="w-4 h-4" />
           </button>
-          <button className="p-2 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-sm transition-colors">
+          <button 
+            onClick={() => setSettingsOpen(true)}
+            className="p-2 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-sm transition-colors"
+          >
             <Settings className="w-4 h-4" />
           </button>
           <button className="p-2 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-sm transition-colors">
             <HelpCircle className="w-4 h-4" />
           </button>
         </div>
+        
+        <SettingsDialog
+          open={settingsOpen}
+          onOpenChange={setSettingsOpen}
+          settings={audioSettings}
+          onSettingsChange={setAudioSettings}
+        />
       </header>
 
       {/* Main content */}
@@ -123,6 +148,12 @@ const Index = () => {
             isActive={isActive && isConnected} 
             signalStrength={signalStrength}
             peakHold={peakHold}
+          />
+          <VolumeControl
+            volume={volume}
+            isMuted={isMuted}
+            onVolumeChange={setVolume}
+            onMuteToggle={() => setIsMuted(!isMuted)}
           />
           <GainControls
             lnaGain={lnaGain}
