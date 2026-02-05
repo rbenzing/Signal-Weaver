@@ -1,54 +1,15 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef } from 'react';
 
 interface SpectrumDisplayProps {
   centerFreq: number;
   bandwidth: number;
   isActive: boolean;
+  spectrumData?: number[];
 }
 
-const SpectrumDisplay = ({ centerFreq, bandwidth, isActive }: SpectrumDisplayProps) => {
+const SpectrumDisplay = ({ centerFreq, bandwidth, isActive, spectrumData = [] }: SpectrumDisplayProps) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const waterfallRef = useRef<HTMLCanvasElement>(null);
-  const [spectrumData, setSpectrumData] = useState<number[]>([]);
-
-  useEffect(() => {
-    // Generate simulated spectrum data
-    const generateSpectrum = () => {
-      const data: number[] = [];
-      const numPoints = 512;
-      
-      for (let i = 0; i < numPoints; i++) {
-        // Base noise floor
-        let value = -90 + Math.random() * 10;
-        
-        // Add some simulated signals
-        const signals = [
-          { pos: 0.25, strength: 40, width: 0.02 },
-          { pos: 0.5, strength: 60, width: 0.03 },
-          { pos: 0.7, strength: 30, width: 0.015 },
-        ];
-        
-        signals.forEach(signal => {
-          const dist = Math.abs(i / numPoints - signal.pos);
-          if (dist < signal.width) {
-            value += signal.strength * (1 - dist / signal.width) * (isActive ? 1 : 0.3);
-          }
-        });
-        
-        data.push(value);
-      }
-      
-      return data;
-    };
-
-    const interval = setInterval(() => {
-      if (isActive) {
-        setSpectrumData(generateSpectrum());
-      }
-    }, 50);
-
-    return () => clearInterval(interval);
-  }, [isActive]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -59,12 +20,12 @@ const SpectrumDisplay = ({ centerFreq, bandwidth, isActive }: SpectrumDisplayPro
     const wtfCtx = waterfall.getContext('2d');
     if (!ctx || !wtfCtx) return;
 
-    // Clear and draw spectrum
+    // Clear and draw spectrum background
     ctx.fillStyle = 'hsl(220, 20%, 4%)';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
     // Draw grid
-    ctx.strokeStyle = 'hsl(180, 30%, 20%)';
+    ctx.strokeStyle = 'hsl(180, 30%, 15%)';
     ctx.lineWidth = 0.5;
     
     for (let i = 0; i <= 10; i++) {
@@ -83,8 +44,8 @@ const SpectrumDisplay = ({ centerFreq, bandwidth, isActive }: SpectrumDisplayPro
       ctx.stroke();
     }
 
-    // Draw spectrum line
-    if (spectrumData.length > 0) {
+    // Draw spectrum line if we have data
+    if (spectrumData.length > 0 && isActive) {
       ctx.beginPath();
       ctx.strokeStyle = 'hsl(180, 100%, 50%)';
       ctx.lineWidth = 2;
@@ -111,24 +72,29 @@ const SpectrumDisplay = ({ centerFreq, bandwidth, isActive }: SpectrumDisplayPro
       ctx.closePath();
       ctx.fillStyle = 'hsla(180, 100%, 50%, 0.1)';
       ctx.fill();
+
+      // Update waterfall
+      const imageData = wtfCtx.getImageData(0, 0, waterfall.width, waterfall.height - 1);
+      wtfCtx.putImageData(imageData, 0, 1);
+
+      // Draw new line at top
+      spectrumData.forEach((value, i) => {
+        const x = (i / spectrumData.length) * waterfall.width;
+        const normalizedValue = (value + 100) / 80;
+        
+        const hue = 240 - normalizedValue * 240;
+        wtfCtx.fillStyle = `hsl(${hue}, 100%, ${30 + normalizedValue * 40}%)`;
+        wtfCtx.fillRect(x, 0, waterfall.width / spectrumData.length + 1, 1);
+      });
+    } else {
+      // Show "no data" state
+      ctx.fillStyle = 'hsl(180, 30%, 30%)';
+      ctx.font = '14px JetBrains Mono';
+      ctx.textAlign = 'center';
+      ctx.fillText('NO SIGNAL DATA', canvas.width / 2, canvas.height / 2);
     }
 
-    // Update waterfall
-    const imageData = wtfCtx.getImageData(0, 0, waterfall.width, waterfall.height - 1);
-    wtfCtx.putImageData(imageData, 0, 1);
-
-    // Draw new line at top
-    spectrumData.forEach((value, i) => {
-      const x = (i / spectrumData.length) * waterfall.width;
-      const normalizedValue = (value + 100) / 80;
-      
-      // Color based on intensity
-      const hue = 240 - normalizedValue * 240;
-      wtfCtx.fillStyle = `hsl(${hue}, 100%, ${30 + normalizedValue * 40}%)`;
-      wtfCtx.fillRect(x, 0, waterfall.width / spectrumData.length + 1, 1);
-    });
-
-  }, [spectrumData]);
+  }, [spectrumData, isActive]);
 
   const formatFreq = (freq: number) => {
     if (freq >= 1e9) return `${(freq / 1e9).toFixed(6)} GHz`;
