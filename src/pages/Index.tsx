@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import SpectrumDisplay from '@/components/SpectrumDisplay';
 import FrequencyControl from '@/components/FrequencyControl';
 import GainControls from '@/components/GainControls';
@@ -9,9 +9,12 @@ import TransceiverControl from '@/components/TransceiverControl';
 import DeviceStatus from '@/components/DeviceStatus';
 import VolumeControl from '@/components/VolumeControl';
 import SettingsDialog from '@/components/SettingsDialog';
+import { useHackRF } from '@/hooks/useHackRF';
 import { Settings, Antenna, Save, FolderOpen, HelpCircle } from 'lucide-react';
 
 const Index = () => {
+  const hackrf = useHackRF();
+  
   const [frequency, setFrequency] = useState(100e6); // 100 MHz
   const [sampleRate, setSampleRate] = useState(10e6);
   const [bandwidth, setBandwidth] = useState(5e6);
@@ -21,8 +24,6 @@ const Index = () => {
   const [mode, setMode] = useState('FM');
   const [isTxMode, setIsTxMode] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
-  const [isActive, setIsActive] = useState(false);
-  const [isConnected, setIsConnected] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   
   // Audio controls
@@ -36,30 +37,52 @@ const Index = () => {
     noiseBlanker: false,
     squelchLevel: -80,
   });
-  
-  // Real SDR data - will be populated when device connects
-  const [spectrumData, setSpectrumData] = useState<number[]>([]);
-  const [signalStrength, setSignalStrength] = useState(-100);
-  const [peakHold, setPeakHold] = useState(-100);
-  const [serialNumber, setSerialNumber] = useState<string>();
-  const [firmwareVersion, setFirmwareVersion] = useState<string>();
 
-  const handleConnect = async () => {
-    // This will be replaced with actual WebSerial/WebUSB connection logic
-    // For now, it shows the intent for real device connection
-    try {
-      // Check if WebSerial is available
-      if ('serial' in navigator) {
-        // Request port access
-        // const port = await (navigator as any).serial.requestPort();
-        // await port.open({ baudRate: 115200 });
-        // setIsConnected(true);
-        console.log('WebSerial available - implement device connection');
-      } else {
-        console.log('WebSerial not supported in this browser');
-      }
-    } catch (error) {
-      console.error('Failed to connect:', error);
+  // Sync frequency changes with device
+  useEffect(() => {
+    if (hackrf.isConnected) {
+      hackrf.setFrequency(frequency);
+    }
+  }, [frequency, hackrf.isConnected]);
+
+  // Sync sample rate with device
+  useEffect(() => {
+    if (hackrf.isConnected) {
+      hackrf.setSampleRate(sampleRate);
+    }
+  }, [sampleRate, hackrf.isConnected]);
+
+  // Sync gains with device
+  useEffect(() => {
+    if (hackrf.isConnected) {
+      hackrf.setLnaGain(lnaGain);
+    }
+  }, [lnaGain, hackrf.isConnected]);
+
+  useEffect(() => {
+    if (hackrf.isConnected) {
+      hackrf.setVgaGain(vgaGain);
+    }
+  }, [vgaGain, hackrf.isConnected]);
+
+  useEffect(() => {
+    if (hackrf.isConnected) {
+      hackrf.setTxVgaGain(txVgaGain);
+    }
+  }, [txVgaGain, hackrf.isConnected]);
+
+  // Sync TX mode with device
+  useEffect(() => {
+    if (hackrf.isConnected) {
+      hackrf.setTxMode(isTxMode);
+    }
+  }, [isTxMode, hackrf.isConnected]);
+
+  const handleActiveToggle = async () => {
+    if (hackrf.isActive) {
+      hackrf.stopStreaming();
+    } else {
+      await hackrf.startStreaming();
     }
   };
 
@@ -108,19 +131,19 @@ const Index = () => {
         {/* Left sidebar - Controls */}
         <div className="col-span-3 flex flex-col gap-2">
           <DeviceStatus 
-            isConnected={isConnected} 
-            serialNumber={serialNumber}
-            firmwareVersion={firmwareVersion}
-            onConnect={handleConnect}
+            isConnected={hackrf.isConnected} 
+            serialNumber={hackrf.serialNumber}
+            firmwareVersion={hackrf.firmwareVersion}
+            onConnect={hackrf.connect}
           />
           <TransceiverControl
             isTxMode={isTxMode}
             isRecording={isRecording}
-            isActive={isActive}
-            isConnected={isConnected}
+            isActive={hackrf.isActive}
+            isConnected={hackrf.isConnected}
             onTxToggle={() => setIsTxMode(!isTxMode)}
             onRecordToggle={() => setIsRecording(!isRecording)}
-            onActiveToggle={() => setIsActive(!isActive)}
+            onActiveToggle={handleActiveToggle}
           />
           <ModeSelector mode={mode} onChange={setMode} />
           <SampleRateControl
@@ -137,17 +160,17 @@ const Index = () => {
           <SpectrumDisplay
             centerFreq={frequency}
             bandwidth={sampleRate}
-            isActive={isActive && isConnected}
-            spectrumData={spectrumData}
+            isActive={hackrf.isActive && hackrf.isConnected}
+            spectrumData={hackrf.spectrumData}
           />
         </div>
 
         {/* Right sidebar - Meters and Gains */}
         <div className="col-span-3 flex flex-col gap-2">
           <SignalMeter 
-            isActive={isActive && isConnected} 
-            signalStrength={signalStrength}
-            peakHold={peakHold}
+            isActive={hackrf.isActive && hackrf.isConnected} 
+            signalStrength={hackrf.signalStrength}
+            peakHold={hackrf.peakHold}
           />
           <VolumeControl
             volume={volume}
@@ -182,7 +205,7 @@ const Index = () => {
         </div>
         
         <div className="flex items-center gap-4">
-          {!isConnected ? (
+          {!hackrf.isConnected ? (
             <span className="flex items-center gap-1 text-muted-foreground">
               <span className="w-2 h-2 rounded-full bg-muted" />
               NO DEVICE
