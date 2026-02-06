@@ -42,46 +42,65 @@ const FrequencyControl = ({ frequency, onChange }: FrequencyControlProps) => {
     <div className="panel">
       <div className="panel-header">Frequency</div>
       
-      <div className="flex items-center justify-center gap-1 py-4">
+      <div className="flex items-center justify-center gap-1 py-6">
         {digits.map((digit, index) => {
           const isDecimal = digit === '.';
           
           return (
             <div
               key={index}
-              className={`relative ${isDecimal ? 'w-2' : 'w-7'} ${!isDecimal ? 'group cursor-pointer' : ''}`}
+              className={`relative ${isDecimal ? 'w-2' : 'w-7'} ${!isDecimal ? 'cursor-pointer' : ''}`}
               onMouseEnter={() => !isDecimal && setActiveDigit(index)}
-              onMouseLeave={() => setActiveDigit(null)}
+              onMouseLeave={(e) => {
+                // Check if we're leaving to a child element (the buttons)
+                const relatedTarget = e.relatedTarget as HTMLElement;
+                if (relatedTarget && e.currentTarget.contains(relatedTarget)) {
+                  return;
+                }
+                setActiveDigit(null);
+              }}
             >
-              {!isDecimal && activeDigit === index && (
+              {!isDecimal && (
                 <button
-                  onClick={() => adjustFrequency(index, 'up')}
-                  className="absolute -top-6 left-0 right-0 flex justify-center text-primary hover:text-accent transition-colors"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    adjustFrequency(index, 'up');
+                  }}
+                  onMouseEnter={() => setActiveDigit(index)}
+                  className={`absolute -top-5 left-0 right-0 flex justify-center text-primary hover:text-accent transition-all ${
+                    activeDigit === index ? 'opacity-100 visible' : 'opacity-0 invisible'
+                  }`}
                 >
-                  <ChevronUp className="w-4 h-4" />
+                  <ChevronUp className="w-5 h-5" />
                 </button>
               )}
               
               <span
-                className={`frequency-display text-2xl block text-center ${
+                className={`frequency-display text-2xl block text-center transition-colors ${
                   !isDecimal && activeDigit === index ? 'text-accent' : ''
                 }`}
               >
                 {digit}
               </span>
               
-              {!isDecimal && activeDigit === index && (
+              {!isDecimal && (
                 <button
-                  onClick={() => adjustFrequency(index, 'down')}
-                  className="absolute -bottom-6 left-0 right-0 flex justify-center text-primary hover:text-accent transition-colors"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    adjustFrequency(index, 'down');
+                  }}
+                  onMouseEnter={() => setActiveDigit(index)}
+                  className={`absolute -bottom-5 left-0 right-0 flex justify-center text-primary hover:text-accent transition-all ${
+                    activeDigit === index ? 'opacity-100 visible' : 'opacity-0 invisible'
+                  }`}
                 >
-                  <ChevronDown className="w-4 h-4" />
+                  <ChevronDown className="w-5 h-5" />
                 </button>
               )}
             </div>
           );
         })}
-        <span className="text-sm text-muted-foreground ml-2 font-display">Hz</span>
+        <span className="text-sm text-muted-foreground ml-[10px] font-display">Hz</span>
       </div>
 
       {/* Quick frequency buttons */}
