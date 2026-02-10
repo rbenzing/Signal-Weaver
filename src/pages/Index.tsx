@@ -13,9 +13,7 @@ import { useHackRF } from '@/hooks/useHackRF';
 import { Settings, Antenna, Save, FolderOpen, HelpCircle } from 'lucide-react';
 
 const Index = () => {
-  const hackrf = useHackRF();
-  
-  const [frequency, setFrequency] = useState(100e6); // 100 MHz
+  const [frequency, setFrequency] = useState(100e6);
   const [sampleRate, setSampleRate] = useState(10e6);
   const [bandwidth, setBandwidth] = useState(5e6);
   const [lnaGain, setLnaGain] = useState(24);
@@ -25,10 +23,11 @@ const Index = () => {
   const [isTxMode, setIsTxMode] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  
-  // Audio controls
   const [volume, setVolume] = useState(75);
   const [isMuted, setIsMuted] = useState(false);
+
+  const hackrf = useHackRF({ mode, volume, isMuted });
+  
   const [audioSettings, setAudioSettings] = useState({
     outputDevice: 'default',
     sampleRate: 48000,
