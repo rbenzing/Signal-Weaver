@@ -48,12 +48,28 @@ export const useHackRF = (): UseHackRFReturn => {
       }
 
       // Request port access - this will show the browser's device picker
-      const port = await (navigator as any).serial.requestPort({
-        filters: [
-          { usbVendorId: 0x1d50, usbProductId: 0x6089 }, // HackRF One
-          { usbVendorId: 0x1d50, usbProductId: 0x604b }, // HackRF Jawbreaker
-        ]
-      });
+      let port;
+      try {
+        port = await (navigator as any).serial.requestPort({
+          filters: [
+            { usbVendorId: 0x1d50, usbProductId: 0x6089 }, // HackRF One
+            { usbVendorId: 0x1d50, usbProductId: 0x604b }, // HackRF Jawbreaker
+          ]
+        });
+      } catch (innerError) {
+        if ((innerError as Error).name === 'SecurityError') {
+          // Iframe permissions policy blocks WebSerial - prompt user to open in new tab
+          const currentUrl = window.location.href;
+          alert(
+            'WebSerial is blocked in embedded iframes.\n\n' +
+            'Please open this app in a new browser tab to connect your HackRF device.\n\n' +
+            'URL: ' + currentUrl
+          );
+          window.open(currentUrl, '_blank');
+          return false;
+        }
+        throw innerError;
+      }
 
       await port.open({ baudRate: 115200 });
       portRef.current = port;
