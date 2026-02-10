@@ -50,6 +50,7 @@ export const useHackRF = (): UseHackRFReturn => {
       // Request port access - this will show the browser's device picker
       let port;
       try {
+        // First try with HackRF-specific filters
         port = await (navigator as any).serial.requestPort({
           filters: [
             { usbVendorId: 0x1d50, usbProductId: 0x6089 }, // HackRF One
@@ -58,7 +59,6 @@ export const useHackRF = (): UseHackRFReturn => {
         });
       } catch (innerError) {
         if ((innerError as Error).name === 'SecurityError') {
-          // Iframe permissions policy blocks WebSerial - prompt user to open in new tab
           const currentUrl = window.location.href;
           alert(
             'WebSerial is blocked in embedded iframes.\n\n' +
@@ -68,7 +68,27 @@ export const useHackRF = (): UseHackRFReturn => {
           window.open(currentUrl, '_blank');
           return false;
         }
-        throw innerError;
+        if ((innerError as Error).name === 'NotFoundError') {
+          // No HackRF-specific device found - try showing ALL serial ports
+          console.log('No HackRF-filtered device found, showing all serial ports...');
+          try {
+            port = await (navigator as any).serial.requestPort();
+          } catch (retryError) {
+            if ((retryError as Error).name === 'SecurityError') {
+              const currentUrl = window.location.href;
+              alert(
+                'WebSerial is blocked in embedded iframes.\n\n' +
+                'Please open this app in a new browser tab to connect your HackRF device.\n\n' +
+                'URL: ' + currentUrl
+              );
+              window.open(currentUrl, '_blank');
+              return false;
+            }
+            throw retryError;
+          }
+        } else {
+          throw innerError;
+        }
       }
 
       await port.open({ baudRate: 115200 });
