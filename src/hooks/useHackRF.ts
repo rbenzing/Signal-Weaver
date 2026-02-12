@@ -18,6 +18,11 @@ interface UseHackRFOptions {
   mode?: string;
   volume?: number;
   isMuted?: boolean;
+  frequency?: number;
+  sampleRate?: number;
+  bandwidth?: number;
+  lnaGain?: number;
+  vgaGain?: number;
 }
 
 interface UseHackRFReturn extends HackRFState {
@@ -27,6 +32,7 @@ interface UseHackRFReturn extends HackRFState {
   stopStreaming: () => void;
   setFrequency: (freq: number) => Promise<void>;
   setSampleRate: (rate: number) => Promise<void>;
+  setBasebandFilter: (bw: number) => Promise<void>;
   setLnaGain: (gain: number) => Promise<void>;
   setVgaGain: (gain: number) => Promise<void>;
   setTxVgaGain: (gain: number) => Promise<void>;
@@ -37,7 +43,15 @@ const FFT_SIZE = 1024;
 const AUDIO_SAMPLE_RATE = 48000;
 
 export const useHackRF = (options: UseHackRFOptions = {}): UseHackRFReturn => {
-  const { mode = 'FM', volume = 75, isMuted = false } = options;
+  const { mode = 'FM', volume = 75, isMuted = false, frequency = 100e6, sampleRate = 10e6, bandwidth = 5e6, lnaGain = 24, vgaGain = 20 } = options;
+  const frequencyRef = useRef(frequency);
+  const bandwidthRef = useRef(bandwidth);
+  const lnaGainRef = useRef(lnaGain);
+  const vgaGainRef = useRef(vgaGain);
+  useEffect(() => { frequencyRef.current = frequency; }, [frequency]);
+  useEffect(() => { bandwidthRef.current = bandwidth; }, [bandwidth]);
+  useEffect(() => { lnaGainRef.current = lnaGain; }, [lnaGain]);
+  useEffect(() => { vgaGainRef.current = vgaGain; }, [vgaGain]);
 
   const [state, setState] = useState<HackRFState>({
     isConnected: false,
@@ -297,8 +311,23 @@ export const useHackRF = (options: UseHackRFOptions = {}): UseHackRFReturn => {
       setState(prev => ({ ...prev, isActive: true, peakHold: -100 }));
 
       if (hackrfRef.current) {
-        // WebUSB path - proper HackRF protocol
-        await hackrfRef.current.startRx((samples: Int8Array) => {
+        // Configure device BEFORE entering RX mode
+        const dev = hackrfRef.current;
+        const freq = frequencyRef.current;
+        const sr = sampleRateRef.current;
+        const bw = bandwidthRef.current;
+        
+        console.log(`HackRF: Configuring → freq=${(freq / 1e6).toFixed(3)} MHz, SR=${(sr / 1e6).toFixed(1)} MS/s, BW=${(bw / 1e6).toFixed(2)} MHz`);
+        
+        await dev.setSampleRate(sr);
+        await dev.setBasebandFilter(bw);
+        await dev.setFrequency(freq);
+        await dev.setLnaGain(lnaGainRef.current);
+        await dev.setVgaGain(vgaGainRef.current);
+        await dev.setAmpEnable(true);
+        
+        // Now start RX
+        await dev.startRx((samples: Int8Array) => {
           processIQData(samples);
         });
       } else if (portRef.current) {
@@ -369,6 +398,14 @@ export const useHackRF = (options: UseHackRFOptions = {}): UseHackRFReturn => {
     console.log('Set sample rate:', (rate / 1e6).toFixed(1), 'MS/s');
   }, []);
 
+  const setBasebandFilter = useCallback(async (bw: number): Promise<void> => {
+    bandwidthRef.current = bw;
+    if (hackrfRef.current) {
+      await hackrfRef.current.setBasebandFilter(bw);
+    }
+    console.log('Set baseband filter:', (bw / 1e6).toFixed(2), 'MHz');
+  }, []);
+
   const setLnaGain = useCallback(async (gain: number): Promise<void> => {
     if (hackrfRef.current) {
       await hackrfRef.current.setLnaGain(gain);
@@ -420,6 +457,7 @@ export const useHackRF = (options: UseHackRFOptions = {}): UseHackRFReturn => {
     stopStreaming,
     setFrequency,
     setSampleRate,
+    setBasebandFilter,
     setLnaGain,
     setVgaGain,
     setTxVgaGain,

@@ -26,7 +26,7 @@ const Index = () => {
   const [volume, setVolume] = useState(75);
   const [isMuted, setIsMuted] = useState(false);
 
-  const hackrf = useHackRF({ mode, volume, isMuted });
+  const hackrf = useHackRF({ mode, volume, isMuted, frequency, sampleRate, bandwidth, lnaGain, vgaGain });
   
   const [audioSettings, setAudioSettings] = useState({
     outputDevice: 'default',
@@ -44,12 +44,13 @@ const Index = () => {
     }
   }, [frequency, hackrf.isConnected]);
 
-  // Sync sample rate with device
+  // Sync sample rate and baseband filter with device
   useEffect(() => {
     if (hackrf.isConnected) {
       hackrf.setSampleRate(sampleRate);
+      hackrf.setBasebandFilter(bandwidth);
     }
-  }, [sampleRate, hackrf.isConnected]);
+  }, [sampleRate, bandwidth, hackrf.isConnected]);
 
   // Sync gains with device
   useEffect(() => {

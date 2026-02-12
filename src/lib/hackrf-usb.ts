@@ -193,10 +193,22 @@ export class HackRFDevice {
   }
 
   async setBasebandFilter(bwHz: number): Promise<void> {
-    const data = new ArrayBuffer(4);
-    const view = new DataView(data);
-    view.setUint32(0, Math.floor(bwHz), true);
-    await this.controlOut(HackRFRequest.BASEBAND_FILTER_BANDWIDTH_SET, 0, data);
+    // HackRF protocol: value = low 16 bits, index = high 16 bits, no data payload
+    const bw = Math.floor(bwHz);
+    if (!this.device) throw new Error('Not connected');
+    const result = await this.device.controlTransferOut(
+      {
+        requestType: 'vendor',
+        recipient: 'device',
+        request: HackRFRequest.BASEBAND_FILTER_BANDWIDTH_SET,
+        value: bw & 0xffff,
+        index: (bw >> 16) & 0xffff,
+      }
+    );
+    if (result.status !== 'ok') {
+      throw new Error(`setBasebandFilter failed: ${result.status}`);
+    }
+    console.log(`HackRF: baseband filter → ${(bwHz / 1e6).toFixed(2)} MHz`);
   }
 
   async setLnaGain(gain: number): Promise<void> {
