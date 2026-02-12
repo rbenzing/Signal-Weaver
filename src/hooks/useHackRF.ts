@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { computeSpectrum, FMDemodulator, AMDemodulator, SSBDemodulator, decimate, lowPassFilter } from '@/lib/dsp';
+import { computeSpectrum, FMDemodulator, AMDemodulator, SSBDemodulator, decimate, lowPassFilter, decimateIQ, getIFDecimationFactor } from '@/lib/dsp';
 import { AudioOutput } from '@/lib/audio-output';
 import { HackRFDevice } from '@/lib/hackrf-usb';
 
@@ -140,28 +140,41 @@ export const useHackRF = (options: UseHackRFOptions = {}): UseHackRFReturn => {
     }
 
     // --- Demodulation for audio ---
+    // Step 1: Decimate I/Q to an appropriate IF rate BEFORE demodulation
     const currentMode = modeRef.current;
-    let audioSamples: Float32Array;
-
-    switch (currentMode) {
-      case 'FM': case 'WFM':
-        audioSamples = fmDemodRef.current.demodulate(iSamples, qSamples); break;
-      case 'AM':
-        audioSamples = amDemodRef.current.demodulate(iSamples, qSamples); break;
-      case 'USB': case 'CW':
-        audioSamples = usbDemodRef.current.demodulate(iSamples, qSamples); break;
-      case 'LSB':
-        audioSamples = lsbDemodRef.current.demodulate(iSamples, qSamples); break;
-      case 'RAW':
-        audioSamples = iSamples; break;
-      default:
-        audioSamples = fmDemodRef.current.demodulate(iSamples, qSamples);
+    const iqDecimFactor = getIFDecimationFactor(sampleRateRef.current, currentMode);
+    
+    let demodI: Float32Array = iSamples;
+    let demodQ: Float32Array = qSamples;
+    if (iqDecimFactor > 1) {
+      const decimated = decimateIQ(iSamples, qSamples, iqDecimFactor);
+      demodI = decimated.i;
+      demodQ = decimated.q;
     }
 
-    audioSamples = lowPassFilter(audioSamples, 8);
-    const decimationFactor = Math.max(1, Math.floor(sampleRateRef.current / AUDIO_SAMPLE_RATE));
-    if (decimationFactor > 1) {
-      audioSamples = decimate(audioSamples, decimationFactor);
+    // Step 2: Demodulate at the reduced IF rate
+    let audioSamples: Float32Array;
+    switch (currentMode) {
+      case 'FM': case 'WFM':
+        audioSamples = fmDemodRef.current.demodulate(demodI, demodQ); break;
+      case 'AM':
+        audioSamples = amDemodRef.current.demodulate(demodI, demodQ); break;
+      case 'USB': case 'CW':
+        audioSamples = usbDemodRef.current.demodulate(demodI, demodQ); break;
+      case 'LSB':
+        audioSamples = lsbDemodRef.current.demodulate(demodI, demodQ); break;
+      case 'RAW':
+        audioSamples = demodI; break;
+      default:
+        audioSamples = fmDemodRef.current.demodulate(demodI, demodQ);
+    }
+
+    // Step 3: Final decimation from IF rate to audio rate (48kHz)
+    const effectiveIFRate = sampleRateRef.current / iqDecimFactor;
+    const audioDecimFactor = Math.max(1, Math.round(effectiveIFRate / AUDIO_SAMPLE_RATE));
+    if (audioDecimFactor > 1) {
+      audioSamples = lowPassFilter(audioSamples, audioDecimFactor * 2);
+      audioSamples = decimate(audioSamples, audioDecimFactor);
     }
 
     if (!mutedRef.current && audioOutputRef.current) {

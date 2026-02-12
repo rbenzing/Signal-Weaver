@@ -194,3 +194,62 @@ export function lowPassFilter(input: Float32Array, taps: number): Float32Array {
 
   return output;
 }
+
+/**
+ * Multi-stage decimation for complex I/Q data.
+ * Applies a low-pass filter before each decimation step to prevent aliasing.
+ */
+export function decimateIQ(
+  iSamples: Float32Array,
+  qSamples: Float32Array,
+  factor: number
+): { i: Float32Array; q: Float32Array } {
+  if (factor <= 1) return { i: new Float32Array(iSamples), q: new Float32Array(qSamples) };
+
+  let curI: Float32Array = iSamples;
+  let curQ: Float32Array = qSamples;
+  let remaining = factor;
+
+  while (remaining > 1) {
+    const stageFactor = Math.min(remaining, 8);
+    remaining = Math.floor(remaining / stageFactor);
+    if (remaining < 1) remaining = 1;
+
+    const taps = stageFactor * 4;
+    curI = lowPassFilter(curI, taps);
+    curQ = lowPassFilter(curQ, taps);
+    curI = decimate(curI, stageFactor);
+    curQ = decimate(curQ, stageFactor);
+  }
+
+  return { i: curI, q: curQ };
+}
+
+/**
+ * Compute appropriate I/Q decimation factor for a given mode and sample rate.
+ * Returns the decimation factor to reduce the I/Q rate to an appropriate IF rate
+ * before demodulation.
+ */
+export function getIFDecimationFactor(sampleRate: number, mode: string): number {
+  // Target intermediate frequency rate for each mode
+  let targetIFRate: number;
+  switch (mode) {
+    case 'WFM':
+      targetIFRate = 256000;   // Wideband FM: 256 kHz IF
+      break;
+    case 'FM':
+      targetIFRate = 200000;   // Narrowband FM broadcast: 200 kHz
+      break;
+    case 'AM':
+      targetIFRate = 48000;    // AM: 48 kHz
+      break;
+    case 'USB': case 'LSB': case 'CW':
+      targetIFRate = 48000;    // SSB/CW: 48 kHz
+      break;
+    default:
+      targetIFRate = 200000;
+  }
+
+  const factor = Math.max(1, Math.floor(sampleRate / targetIFRate));
+  return factor;
+}
