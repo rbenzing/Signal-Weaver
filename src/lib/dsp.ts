@@ -97,6 +97,7 @@ export class FMDemodulator {
     for (let i = 0; i < n; i++) {
       const curI = iSamples[i];
       const curQ = qSamples[i];
+      // Conjugate multiply: current * conj(previous)
       const realProd = curI * this.prevI + curQ * this.prevQ;
       const imagProd = curQ * this.prevI - curI * this.prevQ;
       audio[i] = Math.atan2(imagProd, realProd) / Math.PI;
@@ -157,29 +158,23 @@ export class SSBDemodulator {
 }
 
 /**
- * Decimate with averaging low-pass filter
+ * Simple subsampling decimation (take every Nth sample).
+ * Should be preceded by a low-pass filter to prevent aliasing.
  */
 export function decimate(input: Float32Array, factor: number): Float32Array {
   const outLen = Math.floor(input.length / factor);
   const output = new Float32Array(outLen);
-
   for (let i = 0; i < outLen; i++) {
-    let sum = 0;
-    const start = i * factor;
-    const end = Math.min(start + factor, input.length);
-    for (let j = start; j < end; j++) {
-      sum += input[j];
-    }
-    output[i] = sum / (end - start);
+    output[i] = input[i * factor];
   }
-
   return output;
 }
 
 /**
- * Simple low-pass FIR filter (moving average)
+ * Low-pass FIR filter (moving average with configurable taps)
  */
 export function lowPassFilter(input: Float32Array, taps: number): Float32Array {
+  if (taps <= 1) return input;
   const output = new Float32Array(input.length);
   const invTaps = 1 / taps;
 
@@ -196,8 +191,9 @@ export function lowPassFilter(input: Float32Array, taps: number): Float32Array {
 }
 
 /**
- * Multi-stage decimation for complex I/Q data.
- * Applies a low-pass filter before each decimation step to prevent aliasing.
+ * Decimate complex I/Q data by an exact integer factor.
+ * Uses a single-stage approach: low-pass filter then subsample.
+ * The filter has enough taps to adequately suppress aliasing.
  */
 export function decimateIQ(
   iSamples: Float32Array,
@@ -206,50 +202,45 @@ export function decimateIQ(
 ): { i: Float32Array; q: Float32Array } {
   if (factor <= 1) return { i: new Float32Array(iSamples), q: new Float32Array(qSamples) };
 
-  let curI: Float32Array = iSamples;
-  let curQ: Float32Array = qSamples;
-  let remaining = factor;
+  // Filter with taps proportional to decimation factor for proper anti-aliasing
+  const taps = Math.min(factor * 2, 128);
+  const filtI = lowPassFilter(iSamples, taps);
+  const filtQ = lowPassFilter(qSamples, taps);
 
-  while (remaining > 1) {
-    const stageFactor = Math.min(remaining, 8);
-    remaining = Math.floor(remaining / stageFactor);
-    if (remaining < 1) remaining = 1;
-
-    const taps = stageFactor * 4;
-    curI = lowPassFilter(curI, taps);
-    curQ = lowPassFilter(curQ, taps);
-    curI = decimate(curI, stageFactor);
-    curQ = decimate(curQ, stageFactor);
+  // Subsample by exact factor
+  const outLen = Math.floor(iSamples.length / factor);
+  const outI = new Float32Array(outLen);
+  const outQ = new Float32Array(outLen);
+  for (let i = 0; i < outLen; i++) {
+    outI[i] = filtI[i * factor];
+    outQ[i] = filtQ[i * factor];
   }
 
-  return { i: curI, q: curQ };
+  return { i: outI, q: outQ };
 }
 
 /**
- * Compute appropriate I/Q decimation factor for a given mode and sample rate.
- * Returns the decimation factor to reduce the I/Q rate to an appropriate IF rate
- * before demodulation.
+ * Get I/Q decimation factor for a given mode and sample rate.
+ * Returns the factor to reduce I/Q rate to an appropriate IF before demodulation.
  */
 export function getIFDecimationFactor(sampleRate: number, mode: string): number {
-  // Target intermediate frequency rate for each mode
   let targetIFRate: number;
   switch (mode) {
     case 'WFM':
-      targetIFRate = 256000;   // Wideband FM: 256 kHz IF
+      targetIFRate = 256000;
       break;
     case 'FM':
-      targetIFRate = 200000;   // Narrowband FM broadcast: 200 kHz
+      targetIFRate = 200000;
       break;
     case 'AM':
-      targetIFRate = 48000;    // AM: 48 kHz
+      targetIFRate = 48000;
       break;
     case 'USB': case 'LSB': case 'CW':
-      targetIFRate = 48000;    // SSB/CW: 48 kHz
+      targetIFRate = 48000;
       break;
     default:
       targetIFRate = 200000;
   }
 
-  const factor = Math.max(1, Math.floor(sampleRate / targetIFRate));
-  return factor;
+  return Math.max(1, Math.floor(sampleRate / targetIFRate));
 }

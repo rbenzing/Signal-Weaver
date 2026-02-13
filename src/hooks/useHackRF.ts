@@ -101,6 +101,7 @@ export const useHackRF = (options: UseHackRFOptions = {}): UseHackRFReturn => {
     q: new Float32Array(FFT_SIZE * 2),
     offset: 0,
   });
+  const diagCountRef = useRef(0);
 
   // ==================== I/Q PROCESSING ====================
   const processIQData = useCallback((rawBytes: Int8Array | Uint8Array) => {
@@ -175,6 +176,17 @@ export const useHackRF = (options: UseHackRFOptions = {}): UseHackRFReturn => {
     if (audioDecimFactor > 1) {
       audioSamples = lowPassFilter(audioSamples, audioDecimFactor * 2);
       audioSamples = decimate(audioSamples, audioDecimFactor);
+    }
+
+    // Diagnostic: log first few audio chunks
+    diagCountRef.current++;
+    if (diagCountRef.current <= 5 || diagCountRef.current % 500 === 0) {
+      let maxVal = 0;
+      for (let i = 0; i < audioSamples.length; i++) {
+        const abs = Math.abs(audioSamples[i]);
+        if (abs > maxVal) maxVal = abs;
+      }
+      console.log(`[Audio] chunk #${diagCountRef.current}: ${audioSamples.length} samples, max amplitude: ${maxVal.toFixed(4)}, mode: ${currentMode}, IQ decim: ${iqDecimFactor}, audio decim: ${audioDecimFactor}, muted: ${mutedRef.current}, hasOutput: ${!!audioOutputRef.current}`);
     }
 
     if (!mutedRef.current && audioOutputRef.current) {
