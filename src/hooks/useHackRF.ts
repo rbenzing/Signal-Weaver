@@ -43,7 +43,7 @@ const FFT_SIZE = 1024;
 const AUDIO_SAMPLE_RATE = 48000;
 
 export const useHackRF = (options: UseHackRFOptions = {}): UseHackRFReturn => {
-  const { mode = 'FM', volume = 75, isMuted = false, frequency = 100e6, sampleRate = 10e6, bandwidth = 5e6, lnaGain = 24, vgaGain = 20 } = options;
+  const { mode = 'FM', volume = 75, isMuted = false, frequency = 100e6, sampleRate = 8e6, bandwidth = 1.75e6, lnaGain = 16, vgaGain = 16 } = options;
   const frequencyRef = useRef(frequency);
   const bandwidthRef = useRef(bandwidth);
   const lnaGainRef = useRef(lnaGain);
@@ -79,7 +79,7 @@ export const useHackRF = (options: UseHackRFOptions = {}): UseHackRFReturn => {
   const usbDemodRef = useRef(new SSBDemodulator(true));
   const lsbDemodRef = useRef(new SSBDemodulator(false));
   const audioOutputRef = useRef<AudioOutput | null>(null);
-  const sampleRateRef = useRef(10e6);
+  const sampleRateRef = useRef(8e6);
   const modeRef = useRef(mode);
   const volumeRef = useRef(volume);
   const mutedRef = useRef(isMuted);
@@ -349,7 +349,7 @@ export const useHackRF = (options: UseHackRFOptions = {}): UseHackRFReturn => {
         await dev.setFrequency(freq);
         await dev.setLnaGain(lnaGainRef.current);
         await dev.setVgaGain(vgaGainRef.current);
-        await dev.setAmpEnable(true);
+        await dev.setAmpEnable(false);
         
         // Now start RX
         await dev.startRx((samples: Int8Array) => {

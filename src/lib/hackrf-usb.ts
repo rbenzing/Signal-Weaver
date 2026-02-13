@@ -6,6 +6,26 @@
 const HACKRF_VENDOR_ID = 0x1d50;
 const HACKRF_PRODUCT_IDS = [0x6089, 0x604b];
 
+/**
+ * Valid MAX2837 baseband filter bandwidths (in Hz).
+ * The HackRF firmware only accepts these exact values.
+ */
+const VALID_BASEBAND_BW = [
+  1750000, 2500000, 3500000, 5000000, 5500000,
+  6000000, 7000000, 8000000, 9000000, 10000000,
+  12000000, 14000000, 15000000, 20000000, 24000000, 28000000,
+];
+
+/** Round a requested bandwidth down to the nearest valid MAX2837 baseband filter value */
+function computeBasebandFilterBw(requestedHz: number): number {
+  let best = VALID_BASEBAND_BW[0];
+  for (const bw of VALID_BASEBAND_BW) {
+    if (bw <= requestedHz) best = bw;
+    else break;
+  }
+  return best;
+}
+
 enum HackRFRequest {
   SET_TRANSCEIVER_MODE = 1,
   SAMPLE_RATE_SET = 6,
@@ -193,9 +213,11 @@ export class HackRFDevice {
   }
 
   async setBasebandFilter(bwHz: number): Promise<void> {
-    // HackRF protocol: value = low 16 bits, index = high 16 bits, no data payload
-    const bw = Math.floor(bwHz);
+    // MAX2837 only supports specific baseband filter bandwidths.
+    // Round to nearest valid value to avoid silent failures.
+    const bw = computeBasebandFilterBw(Math.floor(bwHz));
     if (!this.device) throw new Error('Not connected');
+    // HackRF protocol: value = low 16 bits, index = high 16 bits, no data payload
     const result = await this.device.controlTransferOut(
       {
         requestType: 'vendor',
@@ -208,7 +230,7 @@ export class HackRFDevice {
     if (result.status !== 'ok') {
       throw new Error(`setBasebandFilter failed: ${result.status}`);
     }
-    console.log(`HackRF: baseband filter → ${(bwHz / 1e6).toFixed(2)} MHz`);
+    console.log(`HackRF: baseband filter → ${(bw / 1e6).toFixed(2)} MHz (requested ${(bwHz / 1e6).toFixed(2)} MHz)`);
   }
 
   async setLnaGain(gain: number): Promise<void> {
