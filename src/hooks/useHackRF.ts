@@ -174,7 +174,9 @@ export const useHackRF = (options: UseHackRFOptions = {}): UseHackRFReturn => {
     const effectiveIFRate = sampleRateRef.current / iqDecimFactor;
     const audioDecimFactor = Math.max(1, Math.round(effectiveIFRate / AUDIO_SAMPLE_RATE));
     if (audioDecimFactor > 1) {
-      audioSamples = lowPassFilter(audioSamples, audioDecimFactor * 2);
+      // Use taps = factor (NOT factor*2) to preserve audio bandwidth.
+      // At 1MHz IF → 48kHz audio (factor=21): -3dB at 1M×0.443/21 = 21kHz ✓
+      audioSamples = lowPassFilter(audioSamples, audioDecimFactor);
       audioSamples = decimate(audioSamples, audioDecimFactor);
     }
 
