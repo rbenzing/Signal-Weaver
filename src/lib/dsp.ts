@@ -202,8 +202,11 @@ export function decimateIQ(
 ): { i: Float32Array; q: Float32Array } {
   if (factor <= 1) return { i: new Float32Array(iSamples), q: new Float32Array(qSamples) };
 
-  // Filter with taps proportional to decimation factor for proper anti-aliasing
-  const taps = Math.min(factor * 2, 128);
+  // CRITICAL: taps must NOT exceed the decimation factor, otherwise the moving average
+  // filter's -3dB point drops below the signal bandwidth and destroys the content.
+  // With taps = factor, -3dB ≈ 0.443 × fs/factor, which equals 0.443 × output_rate.
+  // For FM at 8MS/s→1MHz (factor=8): -3dB at 443kHz, preserving ±100kHz FM signal.
+  const taps = Math.min(factor, 64);
   const filtI = lowPassFilter(iSamples, taps);
   const filtQ = lowPassFilter(qSamples, taps);
 
@@ -227,19 +230,24 @@ export function getIFDecimationFactor(sampleRate: number, mode: string): number 
   let targetIFRate: number;
   switch (mode) {
     case 'WFM':
-      targetIFRate = 256000;
+      // Broadcast FM: ±75kHz deviation + stereo/RDS = ~200kHz signal bandwidth
+      // Need IF rate >> 200kHz to preserve modulation for demodulator
+      targetIFRate = 1000000;
       break;
     case 'FM':
-      targetIFRate = 200000;
+      // Also used for broadcast FM — need high IF to preserve ±75kHz modulation
+      targetIFRate = 1000000;
       break;
     case 'AM':
-      targetIFRate = 48000;
+      // AM broadcast: ±5kHz bandwidth, 200kHz IF is plenty
+      targetIFRate = 200000;
       break;
     case 'USB': case 'LSB': case 'CW':
+      // SSB/CW: ~3kHz bandwidth
       targetIFRate = 48000;
       break;
     default:
-      targetIFRate = 200000;
+      targetIFRate = 1000000;
   }
 
   return Math.max(1, Math.floor(sampleRate / targetIFRate));
