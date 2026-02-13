@@ -336,7 +336,6 @@ export const useHackRF = (options: UseHackRFOptions = {}): UseHackRFReturn => {
       setState(prev => ({ ...prev, isActive: true, peakHold: -100 }));
 
       if (hackrfRef.current) {
-        // Configure device BEFORE entering RX mode
         const dev = hackrfRef.current;
         const freq = frequencyRef.current;
         const sr = sampleRateRef.current;
@@ -344,17 +343,21 @@ export const useHackRF = (options: UseHackRFOptions = {}): UseHackRFReturn => {
         
         console.log(`HackRF: Configuring → freq=${(freq / 1e6).toFixed(3)} MHz, SR=${(sr / 1e6).toFixed(1)} MS/s, BW=${(bw / 1e6).toFixed(2)} MHz`);
         
+        // Step 1: Configure baseband parameters BEFORE RX
         await dev.setSampleRate(sr);
         await dev.setBasebandFilter(bw);
         await dev.setFrequency(freq);
-        await dev.setLnaGain(lnaGainRef.current);
-        await dev.setVgaGain(vgaGainRef.current);
-        await dev.setAmpEnable(false);
         
-        // Now start RX
+        // Step 2: Enter RX mode FIRST — HackRF ignores gain commands until transceiver is active
         await dev.startRx((samples: Int8Array) => {
           processIQData(samples);
         });
+        
+        // Step 3: Set gains AFTER entering RX mode (required by HackRF hardware)
+        await dev.setAmpEnable(false);
+        await dev.setLnaGain(lnaGainRef.current);
+        await dev.setVgaGain(vgaGainRef.current);
+        console.log(`HackRF: Gains applied post-RX → LNA=${lnaGainRef.current} dB, VGA=${vgaGainRef.current} dB, Amp=OFF`);
       } else if (portRef.current) {
         // WebSerial fallback path
         const reader = portRef.current.readable?.getReader();
