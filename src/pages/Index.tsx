@@ -15,7 +15,7 @@ import { Settings, Antenna, Save, FolderOpen, HelpCircle } from 'lucide-react';
 const Index = () => {
   const [frequency, setFrequency] = useState(100e6);
   const [sampleRate, setSampleRate] = useState(8e6);
-  const [bandwidth, setBandwidth] = useState(1.75e6);
+  const [bandwidth, setBandwidth] = useState(6e6); // 0.75 * 8MHz per HackRF docs
   const [lnaGain, setLnaGain] = useState(16);
   const [vgaGain, setVgaGain] = useState(16);
   const [txVgaGain, setTxVgaGain] = useState(30);
