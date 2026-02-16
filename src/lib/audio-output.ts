@@ -6,9 +6,12 @@
  * 2. Small sample chunks are accumulated into larger buffers (~4096 samples) before
  *    scheduling to avoid overhead from thousands of tiny AudioBufferSourceNodes
  * 3. Gapless playback via precise scheduling with nextStartTime tracking
+ * 4. setSinkId() routes audio to the user-selected output device
+ * 5. Audio gain amplification compensates for low FM demod output levels
  */
 
 const MIN_BUFFER_SIZE = 4096; // Accumulate at least this many samples before scheduling
+const AUDIO_GAIN_BOOST = 15; // Post-demod gain: FM atan2/PI outputs ~0.1-0.15 peak for strong signals
 
 export class AudioOutput {
   private audioCtx: AudioContext | null = null;
@@ -19,6 +22,7 @@ export class AudioOutput {
   private _volume = 0.5;
   private pendingSamples: Float32Array[] = [];
   private pendingLength = 0;
+  private _outputDeviceId: string = 'default';
 
   get sampleRate(): number {
     return this._sampleRate;
@@ -33,6 +37,18 @@ export class AudioOutput {
       await this.audioCtx.resume();
     }
 
+    // Route audio to selected output device if supported
+    if (this._outputDeviceId && this._outputDeviceId !== 'default') {
+      try {
+        if ('setSinkId' in this.audioCtx) {
+          await (this.audioCtx as any).setSinkId(this._outputDeviceId);
+          console.log(`Audio output routed to device: ${this._outputDeviceId}`);
+        }
+      } catch (err) {
+        console.warn('Could not set audio output device:', err);
+      }
+    }
+
     this.gainNode = this.audioCtx.createGain();
     this.gainNode.connect(this.audioCtx.destination);
     this.gainNode.gain.value = this._volume;
@@ -40,7 +56,7 @@ export class AudioOutput {
     this.isPlaying = true;
     this.pendingSamples = [];
     this.pendingLength = 0;
-    console.log(`Audio output initialized at ${sampleRate} Hz, state: ${this.audioCtx.state}`);
+    console.log(`Audio output initialized at ${sampleRate} Hz, state: ${this.audioCtx.state}, device: ${this._outputDeviceId}`);
   }
 
   play(samples: Float32Array): void {
@@ -74,6 +90,12 @@ export class AudioOutput {
     this.pendingSamples = [];
     this.pendingLength = 0;
 
+    // Apply audio gain boost — FM demod output is typically very low amplitude
+    // and needs amplification to reach audible levels. Clamp to [-1, 1].
+    for (let i = 0; i < merged.length; i++) {
+      merged[i] = Math.max(-1, Math.min(1, merged[i] * AUDIO_GAIN_BOOST));
+    }
+
     const buffer = this.audioCtx.createBuffer(1, merged.length, this._sampleRate);
     buffer.getChannelData(0).set(merged);
 
@@ -106,6 +128,16 @@ export class AudioOutput {
   setMuted(muted: boolean): void {
     if (this.gainNode) {
       this.gainNode.gain.value = muted ? 0 : this._volume;
+    }
+  }
+
+  setOutputDevice(deviceId: string): void {
+    this._outputDeviceId = deviceId;
+    // If already playing, re-route
+    if (this.audioCtx && 'setSinkId' in this.audioCtx) {
+      (this.audioCtx as any).setSinkId(deviceId).catch((err: any) => {
+        console.warn('Could not switch audio output device:', err);
+      });
     }
   }
 

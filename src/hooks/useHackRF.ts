@@ -23,6 +23,7 @@ interface UseHackRFOptions {
   bandwidth?: number;
   lnaGain?: number;
   vgaGain?: number;
+  audioOutputDevice?: string;
 }
 
 interface UseHackRFReturn extends HackRFState {
@@ -43,7 +44,7 @@ const FFT_SIZE = 1024;
 const AUDIO_SAMPLE_RATE = 48000;
 
 export const useHackRF = (options: UseHackRFOptions = {}): UseHackRFReturn => {
-  const { mode = 'FM', volume = 75, isMuted = false, frequency = 100e6, sampleRate = 8e6, bandwidth = 1.75e6, lnaGain = 16, vgaGain = 16 } = options;
+  const { mode = 'FM', volume = 75, isMuted = false, frequency = 100e6, sampleRate = 8e6, bandwidth = 1.75e6, lnaGain = 16, vgaGain = 16, audioOutputDevice = 'default' } = options;
   const frequencyRef = useRef(frequency);
   const bandwidthRef = useRef(bandwidth);
   const lnaGainRef = useRef(lnaGain);
@@ -83,6 +84,7 @@ export const useHackRF = (options: UseHackRFOptions = {}): UseHackRFReturn => {
   const modeRef = useRef(mode);
   const volumeRef = useRef(volume);
   const mutedRef = useRef(isMuted);
+  const audioDeviceRef = useRef(audioOutputDevice);
 
   // Keep refs in sync
   useEffect(() => { modeRef.current = mode; }, [mode]);
@@ -94,6 +96,10 @@ export const useHackRF = (options: UseHackRFOptions = {}): UseHackRFReturn => {
     mutedRef.current = isMuted;
     audioOutputRef.current?.setMuted(isMuted);
   }, [isMuted]);
+  useEffect(() => {
+    audioDeviceRef.current = audioOutputDevice;
+    audioOutputRef.current?.setOutputDevice(audioOutputDevice);
+  }, [audioOutputDevice]);
 
   // I/Q buffer for FFT
   const iqBufferRef = useRef<{ i: Float32Array; q: Float32Array; offset: number }>({
@@ -319,6 +325,7 @@ export const useHackRF = (options: UseHackRFOptions = {}): UseHackRFReturn => {
   // ==================== STREAMING ====================
   const initAudio = async () => {
     const audio = new AudioOutput();
+    audio.setOutputDevice(audioDeviceRef.current);
     await audio.init(AUDIO_SAMPLE_RATE);
     audio.setVolume(volumeRef.current);
     if (mutedRef.current) audio.setMuted(true);

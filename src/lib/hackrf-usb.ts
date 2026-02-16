@@ -288,7 +288,10 @@ export class HackRFDevice {
       try {
         const result = await this.device.transferIn(this.bulkInEndpoint, 16384);
         if (result.status === 'ok' && result.data && result.data.byteLength > 0) {
-          this.onData?.(new Int8Array(result.data.buffer));
+          // CRITICAL: Use byteOffset/byteLength from DataView — the underlying
+          // ArrayBuffer may be larger than the valid transfer data.
+          const dv = result.data;
+          this.onData?.(new Int8Array(dv.buffer, dv.byteOffset, dv.byteLength));
         } else if (result.status === 'stall') {
           await this.device.clearHalt('in', this.bulkInEndpoint);
         }
