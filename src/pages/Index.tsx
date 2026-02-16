@@ -26,8 +26,6 @@ const Index = () => {
   const [volume, setVolume] = useState(75);
   const [isMuted, setIsMuted] = useState(false);
 
-  const hackrf = useHackRF({ mode, volume, isMuted, frequency, sampleRate, bandwidth, lnaGain, vgaGain });
-  
   const [audioSettings, setAudioSettings] = useState({
     outputDevice: 'default',
     sampleRate: 48000,
@@ -36,6 +34,8 @@ const Index = () => {
     noiseBlanker: false,
     squelchLevel: -80,
   });
+
+  const hackrf = useHackRF({ mode, volume, isMuted, frequency, sampleRate, bandwidth, lnaGain, vgaGain, audioOutputDevice: audioSettings.outputDevice });
 
   // Sync frequency changes with device
   useEffect(() => {
