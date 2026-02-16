@@ -145,10 +145,10 @@ export class HackRFDevice {
     }
   }
 
-  private async controlIn(request: number, value: number, length: number): Promise<DataView> {
+  private async controlIn(request: number, value: number, length: number, index = 0): Promise<DataView> {
     if (!this.device) throw new Error('Not connected');
     const result = await this.device.controlTransferIn(
-      { requestType: 'vendor', recipient: 'device', request, value, index: 0 },
+      { requestType: 'vendor', recipient: 'device', request, value, index },
       length
     );
     if (result.status !== 'ok' || !result.data) {
@@ -234,18 +234,27 @@ export class HackRFDevice {
   }
 
   async setLnaGain(gain: number): Promise<void> {
-    await this.controlIn(HackRFRequest.SET_LNA_GAIN, gain, 1);
-    console.log(`HackRF: LNA gain → ${gain} dB`);
+    // Per libhackrf: LNA gain 0-40 dB in 8 dB steps, value in INDEX field
+    const rounded = Math.min(40, Math.max(0, gain)) & ~0x07;
+    const result = await this.controlIn(HackRFRequest.SET_LNA_GAIN, 0, 1, rounded);
+    const success = result.getUint8(0);
+    console.log(`HackRF: LNA gain → ${rounded} dB (success=${success})`);
   }
 
   async setVgaGain(gain: number): Promise<void> {
-    await this.controlIn(HackRFRequest.SET_VGA_GAIN, gain, 1);
-    console.log(`HackRF: VGA gain → ${gain} dB`);
+    // Per libhackrf: VGA gain 0-62 dB in 2 dB steps, value in INDEX field
+    const rounded = Math.min(62, Math.max(0, gain)) & ~0x01;
+    const result = await this.controlIn(HackRFRequest.SET_VGA_GAIN, 0, 1, rounded);
+    const success = result.getUint8(0);
+    console.log(`HackRF: VGA gain → ${rounded} dB (success=${success})`);
   }
 
   async setTxVgaGain(gain: number): Promise<void> {
-    await this.controlIn(HackRFRequest.SET_TXVGA_GAIN, gain, 1);
-    console.log(`HackRF: TX VGA gain → ${gain} dB`);
+    // Per libhackrf: TX VGA gain 0-47 dB, value in INDEX field
+    const clamped = Math.min(47, Math.max(0, gain));
+    const result = await this.controlIn(HackRFRequest.SET_TXVGA_GAIN, 0, 1, clamped);
+    const success = result.getUint8(0);
+    console.log(`HackRF: TX VGA gain → ${clamped} dB (success=${success})`);
   }
 
   async setAmpEnable(enabled: boolean): Promise<void> {
