@@ -2,14 +2,25 @@ interface SignalMeterProps {
   isActive: boolean;
   signalStrength?: number;
   peakHold?: number;
+  noiseFloor?: number;
 }
 
-const SignalMeter = ({ isActive, signalStrength = -100, peakHold = -100 }: SignalMeterProps) => {
+const SignalMeter = ({
+  isActive,
+  signalStrength = -100,
+  peakHold = -100,
+  noiseFloor,
+}: SignalMeterProps) => {
   const displayStrength = isActive ? signalStrength : -100;
   const displayPeak = isActive ? peakHold : -100;
-  
+
   const normalizedSignal = Math.max(0, Math.min(100, (displayStrength + 100) * 1.25));
   const normalizedPeak = Math.max(0, Math.min(100, (displayPeak + 100) * 1.25));
+
+  // SNR: use noiseFloor if provided, else fall back to (peak - signalStrength)
+  const snr = noiseFloor !== undefined
+    ? displayPeak - noiseFloor
+    : displayPeak - displayStrength;
 
   const getColor = (value: number) => {
     if (value > 75) return 'hsl(0, 100%, 50%)';
@@ -17,10 +28,18 @@ const SignalMeter = ({ isActive, signalStrength = -100, peakHold = -100 }: Signa
     return 'hsl(120, 100%, 50%)';
   };
 
+  const snrColorClass = !isActive
+    ? 'text-secondary-foreground'
+    : snr >= 15
+    ? 'text-green-400'
+    : snr >= 5
+    ? 'text-yellow-400'
+    : 'text-red-400';
+
   return (
     <div className="panel">
       <div className="panel-header">Signal Strength</div>
-      
+
       <div className="space-y-3">
         {/* S-Meter style display */}
         <div className="flex gap-0.5">
@@ -28,17 +47,19 @@ const SignalMeter = ({ isActive, signalStrength = -100, peakHold = -100 }: Signa
             const threshold = i * 5;
             const barActive = normalizedSignal > threshold;
             const isPeak = Math.abs(normalizedPeak - threshold) < 5;
-            
+
             return (
               <div
                 key={i}
                 className={`h-6 flex-1 rounded-sm transition-all duration-75 ${
-                  barActive || isPeak
-                    ? ''
-                    : 'bg-secondary'
+                  barActive || isPeak ? '' : 'bg-secondary'
                 }`}
                 style={{
-                  backgroundColor: barActive ? getColor(threshold) : isPeak ? getColor(normalizedPeak) : undefined,
+                  backgroundColor: barActive
+                    ? getColor(threshold)
+                    : isPeak
+                    ? getColor(normalizedPeak)
+                    : undefined,
                   boxShadow: barActive ? `0 0 8px ${getColor(threshold)}` : undefined,
                   opacity: isPeak && !barActive ? 0.5 : 1,
                 }}
@@ -63,19 +84,19 @@ const SignalMeter = ({ isActive, signalStrength = -100, peakHold = -100 }: Signa
           <div className="text-center">
             <div className="text-[10px] text-muted-foreground uppercase">Signal</div>
             <div className="text-lg font-bold text-primary font-display">
-              {isActive ? displayStrength.toFixed(1) : '---'} dB
+              {isActive ? `${displayStrength.toFixed(1)} dB` : '---'}
             </div>
           </div>
           <div className="text-center">
             <div className="text-[10px] text-muted-foreground uppercase">Peak</div>
             <div className="text-lg font-bold text-accent font-display">
-              {isActive ? displayPeak.toFixed(1) : '---'} dB
+              {isActive ? `${displayPeak.toFixed(1)} dB` : '---'}
             </div>
           </div>
           <div className="text-center">
             <div className="text-[10px] text-muted-foreground uppercase">SNR</div>
-            <div className="text-lg font-bold text-secondary-foreground font-display">
-              {isActive ? (displayStrength + 90).toFixed(1) : '---'} dB
+            <div className={`text-lg font-bold font-display ${snrColorClass}`}>
+              {isActive ? `${snr.toFixed(1)} dB` : '---'}
             </div>
           </div>
         </div>

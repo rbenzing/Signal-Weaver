@@ -3,6 +3,9 @@
  * Implements actual HackRF vendor USB control transfers and bulk data streaming.
  */
 
+import type { ISDRDevice } from './interfaces';
+export type { HackRFDeviceInfo } from './interfaces';
+
 const HACKRF_VENDOR_ID = 0x1d50;
 const HACKRF_PRODUCT_IDS = [0x6089, 0x604b];
 
@@ -17,7 +20,7 @@ const VALID_BASEBAND_BW = [
 ];
 
 /** Round a requested bandwidth down to the nearest valid MAX2837 baseband filter value */
-function computeBasebandFilterBw(requestedHz: number): number {
+export function computeBasebandFilterBw(requestedHz: number): number {
   let best = VALID_BASEBAND_BW[0];
   for (const bw of VALID_BASEBAND_BW) {
     if (bw <= requestedHz) best = bw;
@@ -46,17 +49,11 @@ enum TransceiverMode {
   TX = 2,
 }
 
-export interface HackRFDeviceInfo {
-  boardId: number;
-  firmwareVersion: string;
-  serialNumber: string;
-}
-
 // Use any for WebUSB types since the browser API may not have TS declarations
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type AnyUSBDevice = any;
 
-export class HackRFDevice {
+export class HackRFDevice implements ISDRDevice {
   private device: AnyUSBDevice = null;
   private bulkInEndpoint = 0;
   private streaming = false;
@@ -67,8 +64,13 @@ export class HackRFDevice {
     return this.device !== null && this.device.opened;
   }
 
+  /** Exposes the underlying USBDevice so callers can match navigator.usb 'disconnect' events. */
+  get usbDevice(): AnyUSBDevice {
+    return this.device;
+  }
+
   async connect(): Promise<HackRFDeviceInfo> {
-    const nav = navigator as any;
+    const nav = navigator as Navigator & { usb?: USB };
     if (!nav.usb) {
       throw new Error(
         'WebUSB API not supported. Please use Chrome or Edge.\n\n' +

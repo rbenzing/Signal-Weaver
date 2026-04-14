@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import SpectrumDisplay from '@/components/SpectrumDisplay';
 import FrequencyControl from '@/components/FrequencyControl';
 import GainControls from '@/components/GainControls';
@@ -9,17 +9,18 @@ import TransceiverControl from '@/components/TransceiverControl';
 import DeviceStatus from '@/components/DeviceStatus';
 import VolumeControl from '@/components/VolumeControl';
 import SettingsDialog from '@/components/SettingsDialog';
-import { useHackRF } from '@/hooks/useHackRF';
+import { useSDR } from '@/hooks/useSDR';
+import type { DemodMode } from '@/lib/interfaces';
 import { Settings, Antenna, Save, FolderOpen, HelpCircle } from 'lucide-react';
 
 const Index = () => {
-  const [frequency, setFrequency] = useState(100e6);
+  const [frequency, setFrequency] = useState(105.5e6);
   const [sampleRate, setSampleRate] = useState(8e6);
-  const [bandwidth, setBandwidth] = useState(6e6); // 0.75 * 8MHz per HackRF docs
-  const [lnaGain, setLnaGain] = useState(16);
-  const [vgaGain, setVgaGain] = useState(16);
-  const [txVgaGain, setTxVgaGain] = useState(30);
-  const [mode, setMode] = useState('FM');
+  const [bandwidth, setBandwidth] = useState(6e6); // Baseband filter bandwidth (HackRF hardware filter)
+  const [lnaGain, setLnaGain] = useState(32); // 32 dB recommended for FM broadcast reception
+  const [vgaGain, setVgaGain] = useState(32); // 32 dB recommended for FM broadcast reception
+  const [ampEnabled, setAmpEnabled] = useState(false);
+  const [mode, setMode] = useState<DemodMode>('FM');
   const [isTxMode, setIsTxMode] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -35,55 +36,60 @@ const Index = () => {
     squelchLevel: -80,
   });
 
-  const hackrf = useHackRF({ mode, volume, isMuted, frequency, sampleRate, bandwidth, lnaGain, vgaGain, audioOutputDevice: audioSettings.outputDevice });
-
-  // Sync frequency changes with device
-  useEffect(() => {
-    if (hackrf.isConnected) {
-      hackrf.setFrequency(frequency);
-    }
-  }, [frequency, hackrf.isConnected]);
-
-  // Sync sample rate and baseband filter with device
-  useEffect(() => {
-    if (hackrf.isConnected) {
-      hackrf.setSampleRate(sampleRate);
-      hackrf.setBasebandFilter(bandwidth);
-    }
-  }, [sampleRate, bandwidth, hackrf.isConnected]);
-
-  // Sync gains with device
-  useEffect(() => {
-    if (hackrf.isConnected) {
-      hackrf.setLnaGain(lnaGain);
-    }
-  }, [lnaGain, hackrf.isConnected]);
-
-  useEffect(() => {
-    if (hackrf.isConnected) {
-      hackrf.setVgaGain(vgaGain);
-    }
-  }, [vgaGain, hackrf.isConnected]);
-
-  useEffect(() => {
-    if (hackrf.isConnected) {
-      hackrf.setTxVgaGain(txVgaGain);
-    }
-  }, [txVgaGain, hackrf.isConnected]);
-
-  // Sync TX mode with device
-  useEffect(() => {
-    if (hackrf.isConnected) {
-      hackrf.setTxMode(isTxMode);
-    }
-  }, [isTxMode, hackrf.isConnected]);
+  const sdr = useSDR({
+    mode,
+    volume,
+    isMuted,
+    frequency,
+    sampleRate,
+    bandwidth,
+    lnaGain,
+    vgaGain,
+    ampEnabled,
+    audioOutputDevice: audioSettings.outputDevice,
+  });
 
   const handleActiveToggle = async () => {
-    if (hackrf.isActive) {
-      hackrf.stopStreaming();
+    if (sdr.isActive) {
+      sdr.stopStreaming();
     } else {
-      await hackrf.startStreaming();
+      await sdr.startStreaming();
     }
+  };
+
+  const handleModeChange = (newMode: string) => {
+    setMode(newMode as DemodMode);
+    sdr.setMode(newMode as DemodMode);
+  };
+
+  const handleFrequencyChange = (freq: number) => {
+    setFrequency(freq);
+    sdr.setFrequency(freq);
+  };
+
+  const handleSampleRateChange = (rate: number) => {
+    setSampleRate(rate);
+    sdr.setSampleRate(rate);
+  };
+
+  const handleBandwidthChange = (bw: number) => {
+    setBandwidth(bw);
+    sdr.setBasebandFilter(bw);
+  };
+
+  const handleLnaChange = (gain: number) => {
+    setLnaGain(gain);
+    sdr.setLnaGain(gain);
+  };
+
+  const handleVgaChange = (gain: number) => {
+    setVgaGain(gain);
+    sdr.setVgaGain(gain);
+  };
+
+  const handleAmpToggle = (enabled: boolean) => {
+    setAmpEnabled(enabled);
+    sdr.setAmpEnable(enabled);
   };
 
   return (
@@ -99,7 +105,7 @@ const Index = () => {
             SDR Interface
           </span>
         </div>
-        
+
         <div className="flex items-center gap-2">
           <button className="p-2 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-sm transition-colors">
             <FolderOpen className="w-4 h-4" />
@@ -107,7 +113,7 @@ const Index = () => {
           <button className="p-2 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-sm transition-colors">
             <Save className="w-4 h-4" />
           </button>
-          <button 
+          <button
             onClick={() => setSettingsOpen(true)}
             className="p-2 text-muted-foreground hover:text-foreground hover:bg-secondary rounded-sm transition-colors"
           >
@@ -117,7 +123,7 @@ const Index = () => {
             <HelpCircle className="w-4 h-4" />
           </button>
         </div>
-        
+
         <SettingsDialog
           open={settingsOpen}
           onOpenChange={setSettingsOpen}
@@ -130,47 +136,55 @@ const Index = () => {
       <div className="flex-1 grid grid-cols-12 gap-2">
         {/* Left sidebar - Controls */}
         <div className="col-span-3 flex flex-col gap-2">
-          <DeviceStatus 
-            isConnected={hackrf.isConnected} 
-            serialNumber={hackrf.serialNumber}
-            firmwareVersion={hackrf.firmwareVersion}
-            onConnect={hackrf.connect}
+          <DeviceStatus
+            isConnected={sdr.isConnected}
+            serialNumber={sdr.serialNumber}
+            firmwareVersion={sdr.firmwareVersion}
+            onConnect={sdr.connect}
           />
           <TransceiverControl
             isTxMode={isTxMode}
             isRecording={isRecording}
-            isActive={hackrf.isActive}
-            isConnected={hackrf.isConnected}
+            isActive={sdr.isActive}
+            isConnected={sdr.isConnected}
             onTxToggle={() => setIsTxMode(!isTxMode)}
             onRecordToggle={() => setIsRecording(!isRecording)}
             onActiveToggle={handleActiveToggle}
           />
-          <ModeSelector mode={mode} onChange={setMode} />
+          <ModeSelector mode={mode} onChange={handleModeChange} />
           <SampleRateControl
             sampleRate={sampleRate}
             bandwidth={bandwidth}
-            onSampleRateChange={setSampleRate}
-            onBandwidthChange={setBandwidth}
+            onSampleRateChange={handleSampleRateChange}
+            onBandwidthChange={handleBandwidthChange}
           />
         </div>
 
         {/* Center - Spectrum and Frequency */}
         <div className="col-span-6 flex flex-col gap-2">
-          <FrequencyControl frequency={frequency} onChange={setFrequency} />
+          <FrequencyControl
+            frequency={frequency}
+            onChange={handleFrequencyChange}
+            centerFrequency={sdr.centerFrequency}
+            bandwidth={bandwidth}
+            onCenterFrequencyChange={sdr.setCenterFrequency}
+            onBandwidthChange={handleBandwidthChange}
+          />
           <SpectrumDisplay
             centerFreq={frequency}
             bandwidth={sampleRate}
-            isActive={hackrf.isActive && hackrf.isConnected}
-            spectrumData={hackrf.spectrumData}
+            isActive={sdr.isActive && sdr.isConnected}
+            spectrumData={sdr.spectrumData}
           />
         </div>
 
         {/* Right sidebar - Meters and Gains */}
         <div className="col-span-3 flex flex-col gap-2">
-          <SignalMeter 
-            isActive={hackrf.isActive && hackrf.isConnected} 
-            signalStrength={hackrf.signalStrength}
-            peakHold={hackrf.peakHold}
+          <SignalMeter
+            isActive={sdr.isActive && sdr.isConnected}
+            signalStrength={sdr.signalStrength}
+            peakHold={sdr.peakHold}
+            noiseFloor={sdr.noiseFloor}
           />
           <VolumeControl
             volume={volume}
@@ -181,10 +195,10 @@ const Index = () => {
           <GainControls
             lnaGain={lnaGain}
             vgaGain={vgaGain}
-            txVgaGain={txVgaGain}
-            onLnaChange={setLnaGain}
-            onVgaChange={setVgaGain}
-            onTxVgaChange={setTxVgaGain}
+            ampEnabled={ampEnabled}
+            onLnaChange={handleLnaChange}
+            onVgaChange={handleVgaChange}
+            onAmpToggle={handleAmpToggle}
             isTxMode={isTxMode}
           />
         </div>
@@ -203,9 +217,9 @@ const Index = () => {
             Filter BW: <span className="text-primary">{(bandwidth / 1e6).toFixed(2)} MHz</span>
           </span>
         </div>
-        
+
         <div className="flex items-center gap-4">
-          {!hackrf.isConnected ? (
+          {!sdr.isConnected ? (
             <span className="flex items-center gap-1 text-muted-foreground">
               <span className="w-2 h-2 rounded-full bg-muted" />
               NO DEVICE

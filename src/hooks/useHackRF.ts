@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { computeSpectrum, FMDemodulator, AMDemodulator, SSBDemodulator, decimate, lowPassFilter, decimateIQ, getIFDecimationFactor } from '@/lib/dsp';
+import { computeSpectrum, FMDemodulator, AMDemodulator, SSBDemodulator, DeemphasisFilter, DCBlocker, StatefulMovingAverage, FrequencyTranslator, decimate, getIFDecimationFactor } from '@/lib/dsp';
 import { AudioOutput } from '@/lib/audio-output';
 import { HackRFDevice } from '@/lib/hackrf-usb';
 
@@ -12,6 +12,8 @@ interface HackRFState {
   signalStrength: number;
   peakHold: number;
   connectionType: 'webusb' | 'webserial' | null;
+  centerFrequency: number;  // Hardware tuned frequency
+  tunedFrequency: number;    // DSP-translated frequency (what user is listening to)
 }
 
 interface UseHackRFOptions {
@@ -23,6 +25,7 @@ interface UseHackRFOptions {
   bandwidth?: number;
   lnaGain?: number;
   vgaGain?: number;
+  ampEnabled?: boolean;
   audioOutputDevice?: string;
 }
 
@@ -32,11 +35,12 @@ interface UseHackRFReturn extends HackRFState {
   startStreaming: () => Promise<void>;
   stopStreaming: () => void;
   setFrequency: (freq: number) => Promise<void>;
+  setCenterFrequency: (freq: number) => Promise<void>;
   setSampleRate: (rate: number) => Promise<void>;
   setBasebandFilter: (bw: number) => Promise<void>;
   setLnaGain: (gain: number) => Promise<void>;
   setVgaGain: (gain: number) => Promise<void>;
-  setTxVgaGain: (gain: number) => Promise<void>;
+  setAmpEnable: (enabled: boolean) => Promise<void>;
   setTxMode: (enabled: boolean) => Promise<void>;
 }
 
@@ -44,15 +48,25 @@ const FFT_SIZE = 1024;
 const AUDIO_SAMPLE_RATE = 48000;
 
 export const useHackRF = (options: UseHackRFOptions = {}): UseHackRFReturn => {
-  const { mode = 'FM', volume = 75, isMuted = false, frequency = 100e6, sampleRate = 8e6, bandwidth = 1.75e6, lnaGain = 16, vgaGain = 16, audioOutputDevice = 'default' } = options;
-  const frequencyRef = useRef(frequency);
+  const { mode = 'FM', volume = 75, isMuted = false, frequency = 100e6, sampleRate = 8e6, bandwidth = 1.75e6, lnaGain = 16, vgaGain = 16, ampEnabled = false, audioOutputDevice = 'default' } = options;
+
+  // Center frequency vs tuned frequency architecture:
+  // - centerFrequency: where HackRF hardware is tuned (stays relatively stable)
+  // - tunedFrequency: where user wants to listen (can change frequently)
+  // - frequencyOffset: tunedFrequency - centerFrequency (applied via DSP translation)
+  const centerFrequencyRef = useRef(frequency);
+  const tunedFrequencyRef = useRef(frequency);
+  const frequencyOffsetRef = useRef(0);
+
   const bandwidthRef = useRef(bandwidth);
   const lnaGainRef = useRef(lnaGain);
   const vgaGainRef = useRef(vgaGain);
-  useEffect(() => { frequencyRef.current = frequency; }, [frequency]);
+  const ampEnabledRef = useRef(ampEnabled);
   useEffect(() => { bandwidthRef.current = bandwidth; }, [bandwidth]);
+  useEffect(() => { sampleRateRef.current = sampleRate; }, [sampleRate]);
   useEffect(() => { lnaGainRef.current = lnaGain; }, [lnaGain]);
   useEffect(() => { vgaGainRef.current = vgaGain; }, [vgaGain]);
+  useEffect(() => { ampEnabledRef.current = ampEnabled; }, [ampEnabled]);
 
   const [state, setState] = useState<HackRFState>({
     isConnected: false,
@@ -63,6 +77,8 @@ export const useHackRF = (options: UseHackRFOptions = {}): UseHackRFReturn => {
     signalStrength: -100,
     peakHold: -100,
     connectionType: null,
+    centerFrequency: frequency,
+    tunedFrequency: frequency,
   });
 
   // WebUSB device ref
@@ -74,13 +90,68 @@ export const useHackRF = (options: UseHackRFOptions = {}): UseHackRFReturn => {
   const readerRef = useRef<ReadableStreamDefaultReader<Uint8Array> | null>(null);
   const streamingRef = useRef(false);
 
+  // ==================== CLEANUP ====================
+  // Tears down all resources without touching React state. Safe to call from
+  // event handlers and async loops as well as the intentional disconnect path.
+  const cleanupResources = useCallback(() => {
+    streamingRef.current = false;
+    audioOutputRef.current?.stop();
+    audioOutputRef.current = null;
+    // Cancel the reader before closing the port — Web Serial requires all stream
+    // locks to be released before port.close() will succeed.
+    readerRef.current?.cancel().catch(() => {});
+    readerRef.current = null;
+    const port = portRef.current;
+    portRef.current = null;
+    port?.close().catch(() => {});
+    hackrfRef.current?.disconnect().catch(() => {});
+    hackrfRef.current = null;
+  }, []);
+
+  // Called when the connection drops unexpectedly (physical unplug, read error, etc.)
+  const handleUnexpectedDisconnect = useCallback(() => {
+    cleanupResources();
+    setState({
+      isConnected: false,
+      isActive: false,
+      serialNumber: undefined,
+      firmwareVersion: undefined,
+      spectrumData: [],
+      signalStrength: -100,
+      peakHold: -100,
+      connectionType: null,
+      centerFrequency: 100e6,
+      tunedFrequency: 100e6,
+    });
+    console.warn('HackRF: connection lost unexpectedly');
+  }, [cleanupResources]);
+
+  // Store in a ref so async read loops always see the latest version without
+  // needing to be re-created when the callback identity changes.
+  const handleUnexpectedDisconnectRef = useRef(handleUnexpectedDisconnect);
+  useEffect(() => {
+    handleUnexpectedDisconnectRef.current = handleUnexpectedDisconnect;
+  }, [handleUnexpectedDisconnect]);
+
   // DSP refs
   const fmDemodRef = useRef(new FMDemodulator());
   const amDemodRef = useRef(new AMDemodulator());
   const usbDemodRef = useRef(new SSBDemodulator(true));
   const lsbDemodRef = useRef(new SSBDemodulator(false));
+  // De-emphasis filter for FM/WFM: recreated when effective audio rate changes
+  const deemphasisFilterRef = useRef<DeemphasisFilter | null>(null);
+  const lastEffectiveAudioRateRef = useRef(0);
+  // DC blocker: removes HackRF's LO-leakage spike at the tuned frequency
+  const dcBlockerRef = useRef(new DCBlocker());
+  // Frequency translator: shifts signal from center frequency to tuned frequency
+  const frequencyTranslatorRef = useRef(new FrequencyTranslator());
+  // Stateful lowpass filters: carry history across USB transfer boundaries to
+  // eliminate the 976 Hz amplitude pulse that was creating the "tiss tiss" noise
+  const iqLPFIRef  = useRef<StatefulMovingAverage | null>(null);
+  const iqLPFQRef  = useRef<StatefulMovingAverage | null>(null);
+  const audioLPFRef = useRef<StatefulMovingAverage | null>(null);
   const audioOutputRef = useRef<AudioOutput | null>(null);
-  const sampleRateRef = useRef(8e6);
+  const sampleRateRef = useRef(sampleRate);
   const modeRef = useRef(mode);
   const volumeRef = useRef(volume);
   const mutedRef = useRef(isMuted);
@@ -101,27 +172,84 @@ export const useHackRF = (options: UseHackRFOptions = {}): UseHackRFReturn => {
     audioOutputRef.current?.setOutputDevice(audioOutputDevice);
   }, [audioOutputDevice]);
 
+  // Update frequency translation when user changes frequency
+  useEffect(() => {
+    tunedFrequencyRef.current = frequency;
+    const offset = frequency - centerFrequencyRef.current;
+    frequencyOffsetRef.current = offset;
+    frequencyTranslatorRef.current.setOffset(offset, sampleRateRef.current);
+    setState(prev => ({ ...prev, tunedFrequency: frequency }));
+  }, [frequency]);
+
   // I/Q buffer for FFT
   const iqBufferRef = useRef<{ i: Float32Array; q: Float32Array; offset: number }>({
     i: new Float32Array(FFT_SIZE * 2),
     q: new Float32Array(FFT_SIZE * 2),
     offset: 0,
   });
-  const diagCountRef = useRef(0);
+
+  // Pre-allocated I/Q sample buffers — reused each call to avoid creating
+  // ~32 KB of garbage per USB transfer (~976/sec at 8 MS/s), which was
+  // causing periodic GC pauses that starved the audio scheduler.
+  const iqSampleBufRef = useRef({ i: new Float32Array(8192), q: new Float32Array(8192) });
+
+  // Throttle spectrum/signal-meter setState to ~20 fps. Without this, React
+  // re-renders ~976×/sec, each creating a new 1024-element Array.from(spectrum),
+  // compounding the GC pressure and main-thread congestion.
+  const lastSpectrumUpdateRef = useRef(0);
+
+  // HackRF hardware produces startup transients in the first ~100k samples.
+  // Discard these to avoid corrupting the demodulator state and FFT display.
+  const samplesDiscardedRef = useRef(0);
+  const SAMPLES_TO_DISCARD = 100000;
+
+  // Diagnostic logging: track audio output levels to help debug FM reception issues
+  const lastDiagnosticLogRef = useRef(0);
+  const DIAGNOSTIC_LOG_INTERVAL_MS = 3000;
 
   // ==================== I/Q PROCESSING ====================
   const processIQData = useCallback((rawBytes: Int8Array | Uint8Array) => {
     const numSamples = Math.floor(rawBytes.length / 2);
     if (numSamples === 0) return;
 
+    // Discard first 100k samples to skip HackRF hardware startup transients
+    if (samplesDiscardedRef.current < SAMPLES_TO_DISCARD) {
+      samplesDiscardedRef.current += numSamples;
+      if (samplesDiscardedRef.current === numSamples) {
+        console.log('HackRF: Discarding first 100k samples (hardware transients)...');
+      }
+      if (samplesDiscardedRef.current >= SAMPLES_TO_DISCARD) {
+        console.log(`HackRF: Transients cleared, starting DSP (discarded ${samplesDiscardedRef.current} samples)`);
+      }
+      return;
+    }
+
     const signed = rawBytes instanceof Int8Array ? rawBytes : new Int8Array(rawBytes.buffer, rawBytes.byteOffset, rawBytes.byteLength);
-    const iSamples = new Float32Array(numSamples);
-    const qSamples = new Float32Array(numSamples);
+
+    // Grow pre-allocated buffers only if an unexpectedly large transfer arrives.
+    // In normal operation the HackRF always sends 16384-byte (8192-sample) blocks.
+    const iqBuf = iqSampleBufRef.current;
+    if (iqBuf.i.length < numSamples) {
+      iqBuf.i = new Float32Array(numSamples);
+      iqBuf.q = new Float32Array(numSamples);
+    }
+    // Use subarray views — zero allocation, shares the underlying ArrayBuffer.
+    const iSamples = iqBuf.i.subarray(0, numSamples);
+    const qSamples = iqBuf.q.subarray(0, numSamples);
 
     for (let i = 0; i < numSamples; i++) {
       iSamples[i] = signed[i * 2] / 128.0;
       qSamples[i] = signed[i * 2 + 1] / 128.0;
     }
+
+    // Remove HackRF DC offset before anything else. The LO-leakage spike sits at
+    // exactly the tuned frequency (0 Hz baseband). If left in, it swamps the FM
+    // discriminator and the spectrum display shows a false peak at centre.
+    dcBlockerRef.current.process(iSamples, qSamples);
+
+    // Frequency translation: shift signal from hardware center frequency to user's tuned frequency
+    // This allows us to keep HackRF tuned to a fixed center while digitally tuning within the bandwidth
+    frequencyTranslatorRef.current.translate(iSamples, qSamples);
 
     // --- FFT for spectrum display ---
     const buf = iqBufferRef.current;
@@ -137,12 +265,20 @@ export const useHackRF = (options: UseHackRFOptions = {}): UseHackRFReturn => {
         sum += spectrum[i];
         if (spectrum[i] > peak) peak = spectrum[i];
       }
-      setState(prev => ({
-        ...prev,
-        spectrumData: Array.from(spectrum),
-        signalStrength: sum / spectrum.length,
-        peakHold: Math.max(prev.peakHold, peak),
-      }));
+      // Throttle UI updates to ~20 fps. Without this, setState fires ~976×/sec
+      // (once per USB transfer), triggering React re-renders at the same rate
+      // and creating ~8 KB of Array.from(spectrum) garbage each time — both
+      // contribute to GC pauses that cause the periodic audio hiss dropout.
+      const nowMs = performance.now();
+      if (nowMs - lastSpectrumUpdateRef.current >= 50) {
+        lastSpectrumUpdateRef.current = nowMs;
+        setState(prev => ({
+          ...prev,
+          spectrumData: Array.from(spectrum),
+          signalStrength: sum / spectrum.length,
+          peakHold: Math.max(prev.peakHold, peak),
+        }));
+      }
       buf.offset = 0;
     }
 
@@ -154,9 +290,17 @@ export const useHackRF = (options: UseHackRFOptions = {}): UseHackRFReturn => {
     let demodI: Float32Array = iSamples;
     let demodQ: Float32Array = qSamples;
     if (iqDecimFactor > 1) {
-      const decimated = decimateIQ(iSamples, qSamples, iqDecimFactor);
-      demodI = decimated.i;
-      demodQ = decimated.q;
+      // Stateful IQ lowpass: preserves filter history across USB transfer boundaries,
+      // eliminating the start-of-block amplitude transient that was part of the tiss artifact.
+      const iqTaps = Math.min(iqDecimFactor, 64);
+      if (!iqLPFIRef.current || iqLPFIRef.current.taps !== iqTaps) {
+        iqLPFIRef.current = new StatefulMovingAverage(iqTaps);
+        iqLPFQRef.current = new StatefulMovingAverage(iqTaps);
+      }
+      const filtI = iqLPFIRef.current.process(iSamples);
+      const filtQ = iqLPFQRef.current!.process(qSamples);
+      demodI = decimate(filtI, iqDecimFactor);
+      demodQ = decimate(filtQ, iqDecimFactor);
     }
 
     // Step 2: Demodulate at the reduced IF rate
@@ -176,29 +320,61 @@ export const useHackRF = (options: UseHackRFOptions = {}): UseHackRFReturn => {
         audioSamples = fmDemodRef.current.demodulate(demodI, demodQ);
     }
 
-    // Step 3: Final decimation from IF rate to audio rate (48kHz)
+    // Step 3: Final decimation from IF rate to audio rate (~48kHz)
     const effectiveIFRate = sampleRateRef.current / iqDecimFactor;
     const audioDecimFactor = Math.max(1, Math.round(effectiveIFRate / AUDIO_SAMPLE_RATE));
     if (audioDecimFactor > 1) {
-      // Use taps = factor (NOT factor*2) to preserve audio bandwidth.
-      // At 1MHz IF → 48kHz audio (factor=21): -3dB at 1M×0.443/21 = 21kHz ✓
-      audioSamples = lowPassFilter(audioSamples, audioDecimFactor);
+      // Stateful audio lowpass: the old stateless lowPassFilter reset sum=0 each call,
+      // giving output[0] = input[0]/taps (≈ 1/21 amplitude) instead of a proper average.
+      // After audio decimation this surfaced as a single attenuated sample every USB
+      // transfer — repeating at ~976 Hz — heard as the "tiss tiss" noise.
+      if (!audioLPFRef.current || audioLPFRef.current.taps !== audioDecimFactor) {
+        audioLPFRef.current = new StatefulMovingAverage(audioDecimFactor);
+      }
+      audioSamples = audioLPFRef.current.process(audioSamples);
       audioSamples = decimate(audioSamples, audioDecimFactor);
     }
 
-    // Diagnostic: log first few audio chunks
-    diagCountRef.current++;
-    if (diagCountRef.current <= 5 || diagCountRef.current % 500 === 0) {
-      let maxVal = 0;
-      for (let i = 0; i < audioSamples.length; i++) {
-        const abs = Math.abs(audioSamples[i]);
-        if (abs > maxVal) maxVal = abs;
+    // Calculate the ACTUAL audio rate from the samples we produced, not the mathematical ideal.
+    // Math.round in decimate() means we produce 49 samples for FM (vs floor=48), so the true
+    // rate is audioSamples.length × HackRF_SR / numIQSamples. Using this value in createBuffer()
+    // eliminates the 16ms/sec scheduler drift that was causing a ~3s periodic hiss.
+    // Example: FM 8MS/s → 49 × 8e6/8192 = 47,852 Hz (vs ideal 47,619 Hz, vs floor=46,875 Hz).
+    const effectiveAudioRate = Math.round(audioSamples.length * sampleRateRef.current / numSamples);
+
+    // FM de-emphasis — invert the 75μs pre-emphasis applied by broadcast
+    // FM transmitters. Without this, treble is boosted up to ~17 dB at 15 kHz,
+    // making FM audio sound very hissy and harsh.
+    if (currentMode === 'FM' || currentMode === 'WFM') {
+      if (effectiveAudioRate !== lastEffectiveAudioRateRef.current) {
+        lastEffectiveAudioRateRef.current = effectiveAudioRate;
+        deemphasisFilterRef.current = new DeemphasisFilter(effectiveAudioRate);
       }
-      console.log(`[Audio] chunk #${diagCountRef.current}: ${audioSamples.length} samples, max amplitude: ${maxVal.toFixed(4)}, mode: ${currentMode}, IQ decim: ${iqDecimFactor}, audio decim: ${audioDecimFactor}, muted: ${mutedRef.current}, hasOutput: ${!!audioOutputRef.current}`);
+      deemphasisFilterRef.current!.process(audioSamples);
+    }
+
+    // Diagnostic logging: every 3 seconds, report audio output statistics to help
+    // debug FM reception issues (e.g., silent audio, low levels, clipping)
+    const nowMs = performance.now();
+    if (nowMs - lastDiagnosticLogRef.current >= DIAGNOSTIC_LOG_INTERVAL_MS) {
+      lastDiagnosticLogRef.current = nowMs;
+      let min = Infinity, max = -Infinity, sumSq = 0;
+      for (let i = 0; i < audioSamples.length; i++) {
+        const s = audioSamples[i];
+        if (s < min) min = s;
+        if (s > max) max = s;
+        sumSq += s * s;
+      }
+      const rms = Math.sqrt(sumSq / audioSamples.length);
+      console.log(
+        `[FM DIAG] Mode=${currentMode} | Audio: ${audioSamples.length} samples @ ${effectiveAudioRate} Hz | ` +
+        `Range=[${min.toFixed(3)}, ${max.toFixed(3)}] | RMS=${rms.toFixed(4)} | ` +
+        `Post-boost peak=${(max * 6).toFixed(2)}`
+      );
     }
 
     if (!mutedRef.current && audioOutputRef.current) {
-      audioOutputRef.current.play(audioSamples);
+      audioOutputRef.current.play(audioSamples, effectiveAudioRate);
     }
   }, []);
 
@@ -255,7 +431,7 @@ export const useHackRF = (options: UseHackRFOptions = {}): UseHackRFReturn => {
 
     try {
       // Show ALL serial ports in one picker (no double-prompt)
-      const port = await (navigator as any).serial.requestPort();
+      const port = await (navigator as Navigator & { serial: { requestPort: () => Promise<SerialPort> } }).serial.requestPort();
 
       await port.open({ baudRate: 115200 });
       portRef.current = port;
@@ -289,26 +465,7 @@ export const useHackRF = (options: UseHackRFOptions = {}): UseHackRFReturn => {
 
   // ==================== DISCONNECT ====================
   const disconnect = useCallback(async (): Promise<void> => {
-    streamingRef.current = false;
-
-    audioOutputRef.current?.stop();
-    audioOutputRef.current = null;
-
-    if (hackrfRef.current) {
-      await hackrfRef.current.disconnect();
-      hackrfRef.current = null;
-    }
-
-    if (readerRef.current) {
-      await readerRef.current.cancel();
-      readerRef.current = null;
-    }
-
-    if (portRef.current) {
-      await portRef.current.close();
-      portRef.current = null;
-    }
-
+    cleanupResources();
     setState({
       isConnected: false,
       isActive: false,
@@ -318,9 +475,11 @@ export const useHackRF = (options: UseHackRFOptions = {}): UseHackRFReturn => {
       signalStrength: -100,
       peakHold: -100,
       connectionType: null,
+      centerFrequency: 100e6,
+      tunedFrequency: 100e6,
     });
     console.log('HackRF disconnected');
-  }, []);
+  }, [cleanupResources]);
 
   // ==================== STREAMING ====================
   const initAudio = async () => {
@@ -334,6 +493,13 @@ export const useHackRF = (options: UseHackRFOptions = {}): UseHackRFReturn => {
     fmDemodRef.current.reset();
     amDemodRef.current.reset();
     iqBufferRef.current.offset = 0;
+    deemphasisFilterRef.current = null;
+    lastEffectiveAudioRateRef.current = 0;
+    dcBlockerRef.current.reset();
+    iqLPFIRef.current  = null;
+    iqLPFQRef.current  = null;
+    audioLPFRef.current = null;
+    samplesDiscardedRef.current = 0;  // Reset transient discard counter
   };
 
   const startStreaming = useCallback(async (): Promise<void> => {
@@ -346,27 +512,32 @@ export const useHackRF = (options: UseHackRFOptions = {}): UseHackRFReturn => {
 
       if (hackrfRef.current) {
         const dev = hackrfRef.current;
-        const freq = frequencyRef.current;
+        const tunedFreq = tunedFrequencyRef.current;
         const sr = sampleRateRef.current;
         const bw = bandwidthRef.current;
-        
-        console.log(`HackRF: Configuring → freq=${(freq / 1e6).toFixed(3)} MHz, SR=${(sr / 1e6).toFixed(1)} MS/s, BW=${(bw / 1e6).toFixed(2)} MHz`);
-        
-        // Step 1: Configure baseband parameters BEFORE RX
+
+        // Initialize center frequency to tuned frequency (no offset initially)
+        centerFrequencyRef.current = tunedFreq;
+        frequencyOffsetRef.current = 0;
+        frequencyTranslatorRef.current.setOffset(0, sr);
+
+        console.log(`HackRF: Configuring → center=${(tunedFreq / 1e6).toFixed(3)} MHz, SR=${(sr / 1e6).toFixed(1)} MS/s, BW=${(bw / 1e6).toFixed(2)} MHz`);
+
+        // Step 1: Configure all baseband parameters and gains BEFORE entering RX mode.
+        // Per libhackrf, gain commands are accepted in any state — setting them here
+        // ensures data starts flowing with the correct gains immediately.
         await dev.setSampleRate(sr);
         await dev.setBasebandFilter(bw);
-        await dev.setFrequency(freq);
-        
-        // Step 2: Enter RX mode FIRST — HackRF ignores gain commands until transceiver is active
+        await dev.setFrequency(tunedFreq);
+        await dev.setAmpEnable(ampEnabledRef.current);
+        await dev.setLnaGain(lnaGainRef.current);
+        await dev.setVgaGain(vgaGainRef.current);
+        console.log(`HackRF: Gains set → LNA=${lnaGainRef.current} dB, VGA=${vgaGainRef.current} dB, Amp=${ampEnabledRef.current ? 'ON' : 'OFF'}`);
+
+        // Step 2: Enter RX mode — data starts flowing immediately after this call
         await dev.startRx((samples: Int8Array) => {
           processIQData(samples);
         });
-        
-        // Step 3: Set gains AFTER entering RX mode (required by HackRF hardware)
-        await dev.setAmpEnable(false);
-        await dev.setLnaGain(lnaGainRef.current);
-        await dev.setVgaGain(vgaGainRef.current);
-        console.log(`HackRF: Gains applied post-RX → LNA=${lnaGainRef.current} dB, VGA=${vgaGainRef.current} dB, Amp=OFF`);
       } else if (portRef.current) {
         // WebSerial fallback path
         const reader = portRef.current.readable?.getReader();
@@ -376,16 +547,25 @@ export const useHackRF = (options: UseHackRFOptions = {}): UseHackRFReturn => {
         readerRef.current = reader;
 
         const readLoop = async () => {
-          while (streamingRef.current) {
-            try {
-              const { value, done } = await reader.read();
-              if (done || !streamingRef.current) break;
-              if (value) processIQData(value);
-            } catch (error) {
-              if ((error as Error).name !== 'NetworkError') {
-                console.error('Read error:', error);
+          try {
+            while (streamingRef.current) {
+              try {
+                const { value, done } = await reader.read();
+                if (done || !streamingRef.current) break;
+                if (value) processIQData(value);
+              } catch (error) {
+                // AbortError is expected when reader.cancel() is called intentionally
+                // (stopStreaming / disconnect). Any other error is unexpected.
+                if ((error as Error).name === 'AbortError') break;
+                console.error('HackRF serial read error:', error);
+                break;
               }
-              break;
+            }
+          } finally {
+            // If streamingRef is still true here, the loop exited due to an error
+            // or a physical disconnect rather than an intentional stop.
+            if (streamingRef.current) {
+              handleUnexpectedDisconnectRef.current();
             }
           }
         };
@@ -407,6 +587,11 @@ export const useHackRF = (options: UseHackRFOptions = {}): UseHackRFReturn => {
       hackrfRef.current.stopStreaming().catch(console.error);
     }
 
+    // Cancel the WebSerial reader so the read loop exits cleanly and releases
+    // the stream lock, allowing port.close() to succeed later if needed.
+    readerRef.current?.cancel().catch(() => {});
+    readerRef.current = null;
+
     audioOutputRef.current?.stop();
     audioOutputRef.current = null;
 
@@ -420,11 +605,30 @@ export const useHackRF = (options: UseHackRFOptions = {}): UseHackRFReturn => {
 
   // ==================== DEVICE CONTROLS ====================
   const setFrequency = useCallback(async (freq: number): Promise<void> => {
+    // Update tuned frequency via DSP translation only (no hardware retuning)
+    tunedFrequencyRef.current = freq;
+    const offset = freq - centerFrequencyRef.current;
+    frequencyOffsetRef.current = offset;
+    frequencyTranslatorRef.current.setOffset(offset, sampleRateRef.current);
+    setState(prev => ({ ...prev, tunedFrequency: freq }));
+    console.log(`Tuned: ${(freq / 1e6).toFixed(6)} MHz (offset: ${(offset / 1e3).toFixed(1)} kHz from center)`);
+  }, []);
+
+  const setCenterFrequency = useCallback(async (freq: number): Promise<void> => {
+    // Update hardware center frequency
+    centerFrequencyRef.current = freq;
+
+    // Recalculate offset for current tuned frequency
+    const offset = tunedFrequencyRef.current - freq;
+    frequencyOffsetRef.current = offset;
+    frequencyTranslatorRef.current.setOffset(offset, sampleRateRef.current);
+
     if (hackrfRef.current) {
       await hackrfRef.current.setFrequency(freq);
     }
-    // WebSerial can't send control transfers, so this is a no-op in serial mode
-    console.log('Set frequency:', (freq / 1e6).toFixed(3), 'MHz');
+
+    setState(prev => ({ ...prev, centerFrequency: freq }));
+    console.log(`Center: ${(freq / 1e6).toFixed(3)} MHz (hardware retuned)`);
   }, []);
 
   const setSampleRate = useCallback(async (rate: number): Promise<void> => {
@@ -457,11 +661,12 @@ export const useHackRF = (options: UseHackRFOptions = {}): UseHackRFReturn => {
     console.log('Set VGA gain:', gain, 'dB');
   }, []);
 
-  const setTxVgaGain = useCallback(async (gain: number): Promise<void> => {
+  const setAmpEnable = useCallback(async (enabled: boolean): Promise<void> => {
+    ampEnabledRef.current = enabled;
     if (hackrfRef.current) {
-      await hackrfRef.current.setTxVgaGain(gain);
+      await hackrfRef.current.setAmpEnable(enabled);
     }
-    console.log('Set TX VGA gain:', gain, 'dB');
+    console.log('Set RF amp:', enabled ? 'ON' : 'OFF');
   }, []);
 
   const setTxMode = useCallback(async (enabled: boolean): Promise<void> => {
@@ -477,14 +682,64 @@ export const useHackRF = (options: UseHackRFOptions = {}): UseHackRFReturn => {
 
   // Cleanup on unmount
   useEffect(() => {
-    return () => {
+    return () => { cleanupResources(); };
+  }, [cleanupResources]);
+
+  // Expose audioOutput to window for debugging (test tone, diagnostics)
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      (window as Window & { __hackrfAudioOutput?: unknown }).__hackrfAudioOutput = audioOutputRef.current;
+    }
+  }, []);
+
+  // Handle disconnection events from external causes:
+  //   • beforeunload  — tab/browser close
+  //   • navigator.usb 'disconnect'    — HackRF physically unplugged (WebUSB path)
+  //   • navigator.serial 'disconnect' — serial port physically removed (WebSerial path)
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      // Mark streaming stopped synchronously. Async teardown (USB control transfers,
+      // port.close) is best-effort — browsers do not guarantee promises complete
+      // after unload begins, but the OS will release the USB/serial port regardless.
       streamingRef.current = false;
       audioOutputRef.current?.stop();
       hackrfRef.current?.disconnect().catch(() => {});
-      readerRef.current?.cancel();
-      portRef.current?.close();
+      readerRef.current?.cancel().catch(() => {});
+      portRef.current?.close().catch(() => {});
     };
-  }, []);
+
+    // USBConnectionEvent.device holds the disconnected USBDevice
+    const handleUsbDisconnect = (event: Event) => {
+      const disconnectedDevice = (event as Event & { device?: USBDevice }).device;
+      if (disconnectedDevice && hackrfRef.current?.usbDevice === disconnectedDevice) {
+        handleUnexpectedDisconnect();
+      }
+    };
+
+    // SerialConnectionEvent.port holds the disconnected SerialPort
+    const handleSerialDisconnect = (event: Event) => {
+      const disconnectedPort = (event as Event & { port?: SerialPort }).port;
+      if (disconnectedPort && disconnectedPort === portRef.current) {
+        handleUnexpectedDisconnect();
+      }
+    };
+
+    type NavWithUSBSerial = Navigator & {
+      usb?: { addEventListener: (t: string, l: EventListener) => void; removeEventListener: (t: string, l: EventListener) => void };
+      serial?: { addEventListener: (t: string, l: EventListener) => void; removeEventListener: (t: string, l: EventListener) => void };
+    };
+    const nav = navigator as NavWithUSBSerial;
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    nav.usb?.addEventListener('disconnect', handleUsbDisconnect);
+    nav.serial?.addEventListener('disconnect', handleSerialDisconnect);
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      nav.usb?.removeEventListener('disconnect', handleUsbDisconnect);
+      nav.serial?.removeEventListener('disconnect', handleSerialDisconnect);
+    };
+  }, [handleUnexpectedDisconnect]);
 
   return {
     ...state,
@@ -493,11 +748,12 @@ export const useHackRF = (options: UseHackRFOptions = {}): UseHackRFReturn => {
     startStreaming,
     stopStreaming,
     setFrequency,
+    setCenterFrequency,
     setSampleRate,
     setBasebandFilter,
     setLnaGain,
     setVgaGain,
-    setTxVgaGain,
+    setAmpEnable,
     setTxMode,
   };
 };

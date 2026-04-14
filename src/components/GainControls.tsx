@@ -3,26 +3,26 @@ import { Slider } from '@/components/ui/slider';
 interface GainControlsProps {
   lnaGain: number;
   vgaGain: number;
-  txVgaGain: number;
+  ampEnabled: boolean;
   onLnaChange: (value: number) => void;
   onVgaChange: (value: number) => void;
-  onTxVgaChange: (value: number) => void;
+  onAmpToggle: (enabled: boolean) => void;
   isTxMode: boolean;
 }
 
 const GainControls = ({
   lnaGain,
   vgaGain,
-  txVgaGain,
+  ampEnabled,
   onLnaChange,
   onVgaChange,
-  onTxVgaChange,
+  onAmpToggle,
   isTxMode,
 }: GainControlsProps) => {
   return (
     <div className="panel">
       <div className="panel-header">Gain Controls</div>
-      
+
       <div className="space-y-4">
         {/* LNA Gain */}
         <div className="space-y-2">
@@ -66,31 +66,33 @@ const GainControls = ({
           />
           <div className="flex justify-between text-[10px] text-muted-foreground">
             <span>0</span>
-            <span>31</span>
+            <span>32</span>
             <span>62</span>
           </div>
         </div>
 
-        {/* TX VGA Gain */}
+        {/* RF Amp Enable */}
         <div className="space-y-2">
-          <div className="flex justify-between text-xs">
-            <span className="text-muted-foreground">TX VGA Gain</span>
-            <span className={`font-bold ${isTxMode ? 'text-warning' : 'text-primary'}`}>{txVgaGain} dB</span>
+          <div className="flex justify-between items-center text-xs">
+            <div>
+              <span className="text-muted-foreground">RF Amp</span>
+              <span className="text-[10px] text-muted-foreground ml-1">(+14 dB hardware)</span>
+            </div>
+            <button
+              onClick={() => onAmpToggle(!ampEnabled)}
+              disabled={isTxMode}
+              className={`px-3 py-1 rounded-sm text-xs font-bold transition-colors ${
+                ampEnabled
+                  ? 'bg-primary text-primary-foreground'
+                  : 'bg-secondary text-muted-foreground hover:text-foreground'
+              } disabled:opacity-40 disabled:cursor-not-allowed`}
+            >
+              {ampEnabled ? 'ON' : 'OFF'}
+            </button>
           </div>
-          <Slider
-            value={[txVgaGain]}
-            onValueChange={(v) => onTxVgaChange(v[0])}
-            max={47}
-            min={0}
-            step={1}
-            disabled={!isTxMode}
-            className="cursor-pointer"
-          />
-          <div className="flex justify-between text-[10px] text-muted-foreground">
-            <span>0</span>
-            <span>23</span>
-            <span>47</span>
-          </div>
+          <p className="text-[10px] text-muted-foreground">
+            Broadband hardware preamp. Enable for weak signals; may cause distortion near strong transmitters.
+          </p>
         </div>
       </div>
     </div>

@@ -7,14 +7,17 @@ interface SampleRateControlProps {
   onBandwidthChange: (bw: number) => void;
 }
 
+// Rates below 8 MS/s are not recommended per the HackRF One documentation:
+// the MAX5864 ADC/DAC is not rated below 8 MS/s and the baseband filter
+// provides insufficient aliasing rejection at lower rates.
 const SAMPLE_RATES = [
-  { value: 2e6, label: '2 MS/s' },
-  { value: 4e6, label: '4 MS/s' },
-  { value: 8e6, label: '8 MS/s' },
-  { value: 10e6, label: '10 MS/s' },
-  { value: 12.5e6, label: '12.5 MS/s' },
-  { value: 16e6, label: '16 MS/s' },
-  { value: 20e6, label: '20 MS/s' },
+  { value: 2e6, label: '2 MS/s (not recommended)', warn: true },
+  { value: 4e6, label: '4 MS/s (not recommended)', warn: true },
+  { value: 8e6, label: '8 MS/s', warn: false },
+  { value: 10e6, label: '10 MS/s', warn: false },
+  { value: 12.5e6, label: '12.5 MS/s', warn: false },
+  { value: 16e6, label: '16 MS/s', warn: false },
+  { value: 20e6, label: '20 MS/s', warn: false },
 ];
 
 const BANDWIDTHS = [
@@ -45,7 +48,7 @@ const SampleRateControl = ({
   return (
     <div className="panel">
       <div className="panel-header">Sampling</div>
-      
+
       <div className="space-y-3">
         <div className="space-y-1">
           <label className="text-xs text-muted-foreground">Sample Rate</label>
@@ -58,7 +61,7 @@ const SampleRateControl = ({
             </SelectTrigger>
             <SelectContent className="bg-popover border-border">
               {SAMPLE_RATES.map((rate) => (
-                <SelectItem key={rate.value} value={rate.value.toString()}>
+                <SelectItem key={rate.value} value={rate.value.toString()} className={rate.warn ? 'text-yellow-500' : ''}>
                   {rate.label}
                 </SelectItem>
               ))}
@@ -67,7 +70,7 @@ const SampleRateControl = ({
         </div>
 
         <div className="space-y-1">
-          <label className="text-xs text-muted-foreground">Baseband Filter BW</label>
+          <label className="text-xs text-muted-foreground">BB Filter</label>
           <Select
             value={bandwidth.toString()}
             onValueChange={(v) => onBandwidthChange(Number(v))}

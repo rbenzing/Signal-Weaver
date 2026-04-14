@@ -162,7 +162,12 @@ export class SSBDemodulator {
  * Should be preceded by a low-pass filter to prevent aliasing.
  */
 export function decimate(input: Float32Array, factor: number): Float32Array {
-  const outLen = Math.floor(input.length / factor);
+  // Math.round instead of Math.floor: avoids discarding the fractional last group,
+  // which causes the audio production rate to be systematically ~1.56% too low for
+  // FM at 8 MS/s (1024 IF samples / factor 21 = 48.76 → floor=48, round=49).
+  // The rounded-up sample at index (outLen-1)*factor is always within bounds because
+  // Math.round(n/f)-1 < n/f, so (Math.round(n/f)-1)*f < n.
+  const outLen = Math.round(input.length / factor);
   const output = new Float32Array(outLen);
   for (let i = 0; i < outLen; i++) {
     output[i] = input[i * factor];
@@ -220,6 +225,197 @@ export function decimateIQ(
   }
 
   return { i: outI, q: outQ };
+}
+
+/**
+ * FM de-emphasis filter (IIR low-pass, first order)
+ * Broadcast FM pre-emphasizes audio with a 75μs time constant (US/Japan)
+ * to reduce high-frequency noise. This filter inverts that, restoring flat response.
+ * Transfer function: H(z) = (1-α) / (1 - α·z⁻¹), α = exp(-1/(fs·τ))
+ */
+export class DeemphasisFilter {
+  private alpha: number;
+  private prevOutput = 0;
+
+  constructor(sampleRate: number, timeConstantSec = 75e-6) {
+    this.alpha = Math.exp(-1 / (sampleRate * timeConstantSec));
+  }
+
+  reset(): void {
+    this.prevOutput = 0;
+  }
+
+  /** Apply de-emphasis in-place */
+  process(samples: Float32Array): void {
+    const alpha = this.alpha;
+    let prev = this.prevOutput;
+    for (let i = 0; i < samples.length; i++) {
+      prev = (1 - alpha) * samples[i] + alpha * prev;
+      samples[i] = prev;
+    }
+    this.prevOutput = prev;
+  }
+}
+
+/**
+ * DC blocking filter for raw I/Q samples.
+ *
+ * HackRF (like all direct-conversion SDRs) has a DC offset component at exactly
+ * the tuned frequency caused by LO leakage. This appears as a large spike at 0 Hz
+ * in the baseband. If uncorrected, it swamps the FM discriminator when the signal
+ * carrier is near the centre of the band, making FM demodulation produce pure noise.
+ *
+ * This IIR estimator tracks and subtracts the slowly-varying DC component separately
+ * on I and Q. α = 0.9999 → time constant ≈ 1/((1-α) × fs) = 10 000 samples.
+ * At 8 MS/s that is ~1.25 ms — fast enough to follow HackRF drift, slow enough
+ * not to attenuate any audio content (lowest FM audio ≈ 300 Hz).
+ */
+export class DCBlocker {
+  private avgI = 0;
+  private avgQ = 0;
+
+  reset(): void {
+    this.avgI = 0;
+    this.avgQ = 0;
+  }
+
+  /** Remove DC offset from I/Q samples in-place. */
+  process(iSamples: Float32Array, qSamples: Float32Array): void {
+    const alpha = 0.9999;
+    const beta  = 1 - alpha;
+    let ai = this.avgI, aq = this.avgQ;
+    for (let i = 0; i < iSamples.length; i++) {
+      ai = alpha * ai + beta * iSamples[i];
+      iSamples[i] -= ai;
+      aq = alpha * aq + beta * qSamples[i];
+      qSamples[i] -= aq;
+    }
+    this.avgI = ai;
+    this.avgQ = aq;
+  }
+}
+
+/**
+ * Stateful moving-average low-pass filter.
+ *
+ * The stateless `lowPassFilter` function resets its accumulator to 0 on every
+ * call, which creates a transient ramp-up over the first `taps` output samples.
+ * After audio decimation this manifests as a single attenuated sample (≈ 1/taps
+ * amplitude) at the start of every USB transfer batch — repeating at ~976 Hz
+ * and audible as a "tiss tiss" buzz.
+ *
+ * This class carries the tail of the previous block as history so the filter
+ * response is perfectly continuous across call boundaries.
+ */
+export class StatefulMovingAverage {
+  readonly taps: number;
+  private history: Float32Array; // last (taps-1) input samples from previous call
+
+  constructor(taps: number) {
+    this.taps = taps;
+    this.history = new Float32Array(Math.max(0, taps - 1));
+  }
+
+  reset(): void {
+    this.history.fill(0);
+  }
+
+  process(input: Float32Array): Float32Array {
+    if (this.taps <= 1) return new Float32Array(input);
+
+    const h      = this.history;
+    const hLen   = h.length;          // = taps - 1
+    const invT   = 1 / this.taps;
+    const output = new Float32Array(input.length);
+
+    // Pre-load running sum with the saved history.
+    let sum = 0;
+    for (let k = 0; k < hLen; k++) sum += h[k];
+
+    for (let i = 0; i < input.length; i++) {
+      sum += input[i];
+      if (i > 0) {
+        // Remove the sample leaving the window.
+        if (i <= hLen) {
+          sum -= h[i - 1];          // still reaching into history
+        } else {
+          sum -= input[i - hLen - 1]; // entirely within current block
+        }
+      }
+      output[i] = sum * invT;
+    }
+
+    // Save the last (taps-1) input samples for the next call.
+    if (input.length >= hLen) {
+      h.set(input.subarray(input.length - hLen));
+    } else {
+      h.copyWithin(0, input.length);
+      h.set(input, hLen - input.length);
+    }
+
+    return output;
+  }
+}
+
+/**
+ * Frequency translation (shift I/Q signal in frequency domain).
+ * Translates I/Q samples by frequencyOffset Hz.
+ *
+ * This allows us to keep the hardware tuned to a fixed center frequency
+ * while digitally tuning to any frequency within the captured bandwidth.
+ *
+ * The translation is performed by complex multiplication with e^(j*2π*f_offset*n/fs):
+ * I_out[n] = I[n] * cos(phase) - Q[n] * sin(phase)
+ * Q_out[n] = I[n] * sin(phase) + Q[n] * cos(phase)
+ * where phase = 2π * frequencyOffset * n / sampleRate
+ */
+export class FrequencyTranslator {
+  private phase = 0; // Accumulated phase (radians)
+  private phaseIncrement = 0; // Phase increment per sample (radians)
+
+  /**
+   * Set the frequency offset to translate.
+   * @param frequencyOffset Offset in Hz (positive = shift up, negative = shift down)
+   * @param sampleRate Sample rate in Hz
+   */
+  setOffset(frequencyOffset: number, sampleRate: number): void {
+    // Phase increment per sample
+    this.phaseIncrement = (2 * Math.PI * frequencyOffset) / sampleRate;
+    this.phase = 0; // Reset phase accumulator
+  }
+
+  reset(): void {
+    this.phase = 0;
+  }
+
+  /**
+   * Translate I/Q samples by the configured frequency offset.
+   * Modifies samples in-place for performance.
+   */
+  translate(iSamples: Float32Array, qSamples: Float32Array): void {
+    if (this.phaseIncrement === 0) return; // No translation needed
+
+    let phase = this.phase;
+    const increment = this.phaseIncrement;
+
+    for (let i = 0; i < iSamples.length; i++) {
+      const cosPhase = Math.cos(phase);
+      const sinPhase = Math.sin(phase);
+
+      const iOrig = iSamples[i];
+      const qOrig = qSamples[i];
+
+      // Complex multiplication: (I + jQ) * e^(j*phase)
+      iSamples[i] = iOrig * cosPhase - qOrig * sinPhase;
+      qSamples[i] = iOrig * sinPhase + qOrig * cosPhase;
+
+      phase += increment;
+    }
+
+    // Wrap phase to avoid numerical issues with large values
+    // Keep phase in range [-π, π]
+    this.phase = ((phase + Math.PI) % (2 * Math.PI)) - Math.PI;
+  }
 }
 
 /**

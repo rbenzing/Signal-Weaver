@@ -104,7 +104,7 @@ const SpectrumDisplay = ({ centerFreq, bandwidth, isActive, spectrumData = [] }:
   };
 
   return (
-    <div className="panel flex-1">
+    <div className="panel flex-1 flex flex-col">
       <div className="panel-header flex items-center justify-between">
         <span>Spectrum Analyzer</span>
         <div className="flex items-center gap-4 text-xs">
@@ -112,18 +112,18 @@ const SpectrumDisplay = ({ centerFreq, bandwidth, isActive, spectrumData = [] }:
           <span>Span: {formatFreq(bandwidth)}</span>
         </div>
       </div>
-      
-      <div className="relative">
+
+      <div className="relative flex-1 flex flex-col">
         {/* Spectrum display */}
-        <div className="relative h-48 border border-border rounded-sm overflow-hidden">
-          <canvas 
-            ref={canvasRef} 
-            width={1024} 
+        <div className="relative flex-[3] border border-border rounded-sm overflow-hidden">
+          <canvas
+            ref={canvasRef}
+            width={1024}
             height={192}
             className="w-full h-full"
           />
           <div className="absolute inset-0 scanline pointer-events-none" />
-          
+
           {/* dB scale */}
           <div className="absolute left-1 top-0 bottom-0 flex flex-col justify-between text-[10px] text-muted-foreground">
             <span>0 dB</span>
@@ -133,10 +133,10 @@ const SpectrumDisplay = ({ centerFreq, bandwidth, isActive, spectrumData = [] }:
         </div>
 
         {/* Waterfall display */}
-        <div className="relative h-32 border border-border border-t-0 rounded-sm overflow-hidden">
-          <canvas 
-            ref={waterfallRef} 
-            width={1024} 
+        <div className="relative flex-[2] border border-border border-t-0 rounded-sm overflow-hidden">
+          <canvas
+            ref={waterfallRef}
+            width={1024}
             height={128}
             className="w-full h-full"
           />
