@@ -121,9 +121,14 @@ export function useSDR(options: UseSDROptions = {}) {
     spectrumData: [],
   });
 
+  const tunedFrequencyRef = useRef(frequency);
   const peakHoldRef = useRef(-100);
   const lnaGainRef = useRef(initLnaGain);
   const vgaGainRef = useRef(initVgaGain);
+
+  // Throttle spectrum/signal-meter setState to ~20 fps to avoid flooding React
+  // with ~976 re-renders/sec (one per USB transfer at 8 MS/s).
+  const lastStateUpdateRef = useRef(0);
 
   // ==================== CONNECT ====================
   const connect = useCallback(async (): Promise<boolean> => {
@@ -170,17 +175,26 @@ export function useSDR(options: UseSDROptions = {}) {
     const newPeak = Math.max(result.peak, peakHoldRef.current + 20 * Math.log10(PEAK_DECAY));
     peakHoldRef.current = newPeak;
 
-    // Route audio
-    audioRef.current.play(result.audioSamples, result.audioSampleRate, modeRef.current);
+    // Route audio — skip zero-length warm-up frames
+    if (result.audioSamples.length > 0) {
+      audioRef.current.play(result.audioSamples, result.audioSampleRate, modeRef.current);
+    }
 
-    // Update state (throttled via DSPPipeline internals, but we always update here)
-    setState(prev => ({
-      ...prev,
-      signalStrength: result.signalStrength,
-      peakHold: newPeak,
-      noiseFloor: result.noiseFloor,
-      spectrumData: Array.from(result.spectrumData),
-    }));
+    // Throttle React state updates to ~20 fps (50ms).
+    // Without this, setState fires ~976×/sec (once per USB transfer at 8 MS/s),
+    // which floods React's reconciler and blocks the main thread — starving the
+    // Web Audio scheduler and causing dropouts or complete silence.
+    const nowMs = performance.now();
+    if (nowMs - lastStateUpdateRef.current >= 50) {
+      lastStateUpdateRef.current = nowMs;
+      setState(prev => ({
+        ...prev,
+        signalStrength: result.signalStrength,
+        peakHold: newPeak,
+        noiseFloor: result.noiseFloor,
+        spectrumData: Array.from(result.spectrumData),
+      }));
+    }
   }, []);
 
   // ==================== START STREAMING ====================
@@ -195,14 +209,20 @@ export function useSDR(options: UseSDROptions = {}) {
       pipelineRef.current.reset();
       peakHoldRef.current = -100;
 
-      // Configure hardware
+      // Configure hardware — use ref to avoid stale closure on tunedFrequency
       const dev = deviceRef.current;
       await dev.setSampleRate(sampleRateRef.current);
       await dev.setBasebandFilter(bandwidthRef.current);
-      await dev.setFrequency(state.tunedFrequency);
+      await dev.setFrequency(tunedFrequencyRef.current);
       await dev.setAmpEnable(ampEnabledRef.current);
       await dev.setLnaGain(lnaGainRef.current);
       await dev.setVgaGain(vgaGainRef.current);
+
+      console.log(
+        `useSDR: startStreaming → freq=${(tunedFrequencyRef.current / 1e6).toFixed(3)} MHz, ` +
+        `SR=${(sampleRateRef.current / 1e6).toFixed(1)} MS/s, ` +
+        `LNA=${lnaGainRef.current} dB, VGA=${vgaGainRef.current} dB`
+      );
 
       // Start RX
       await dev.startRx(onIQData);
@@ -212,7 +232,7 @@ export function useSDR(options: UseSDROptions = {}) {
       console.error('useSDR: startStreaming failed', err);
       setState(prev => ({ ...prev, isActive: false }));
     }
-  }, [onIQData, state.tunedFrequency]);
+  }, [onIQData]);
 
   // ==================== STOP STREAMING ====================
   const stopStreaming = useCallback(async (): Promise<void> => {
@@ -227,6 +247,7 @@ export function useSDR(options: UseSDROptions = {}) {
 
   // ==================== SETTERS ====================
   const setFrequency = useCallback(async (freq: number): Promise<void> => {
+    tunedFrequencyRef.current = freq;
     setState(prev => ({ ...prev, tunedFrequency: freq }));
     if (deviceRef.current.isConnected) {
       await deviceRef.current.setFrequency(freq);
@@ -234,6 +255,7 @@ export function useSDR(options: UseSDROptions = {}) {
   }, []);
 
   const setCenterFrequency = useCallback(async (freq: number): Promise<void> => {
+    tunedFrequencyRef.current = freq;
     setState(prev => ({ ...prev, centerFrequency: freq }));
     if (deviceRef.current.isConnected) {
       await deviceRef.current.setFrequency(freq);

@@ -1,4 +1,4 @@
-import { Radio, Mic, Square, Circle, AlertTriangle } from 'lucide-react';
+import { Radio, Mic, Square, Circle } from 'lucide-react';
 
 interface TransceiverControlProps {
   isTxMode: boolean;
@@ -15,50 +15,36 @@ const TransceiverControl = ({
   isRecording,
   isActive,
   isConnected,
-  onTxToggle,
   onRecordToggle,
   onActiveToggle,
 }: TransceiverControlProps) => {
   return (
     <div className="panel">
       <div className="panel-header">Transceiver Control</div>
-      
+
       <div className="space-y-4">
-        {/* TX/RX Toggle */}
+        {/* RX / TX mode indicator — TX is not yet implemented */}
         <div className="flex gap-2">
           <button
-            onClick={() => !isTxMode && isConnected && onTxToggle()}
-            disabled={!isConnected}
-            className={`flex-1 py-3 rounded-sm font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-2 ${
-              !isTxMode && isConnected
-                ? 'btn-rx' 
-                : 'bg-secondary text-secondary-foreground hover:bg-muted disabled:opacity-50'
+            disabled
+            className={`flex-1 py-3 rounded-sm font-bold uppercase tracking-wider flex items-center justify-center gap-2 ${
+              !isTxMode
+                ? 'btn-rx'
+                : 'bg-secondary text-secondary-foreground opacity-50'
             }`}
           >
             <Radio className="w-4 h-4" />
             RX
           </button>
           <button
-            onClick={() => (isTxMode || !isConnected) ? null : onTxToggle()}
-            disabled={!isConnected}
-            className={`flex-1 py-3 rounded-sm font-bold uppercase tracking-wider transition-all flex items-center justify-center gap-2 ${
-              isTxMode && isConnected
-                ? 'btn-tx animate-pulse' 
-                : 'bg-secondary text-secondary-foreground hover:bg-muted disabled:opacity-50'
-            }`}
+            disabled
+            title="TX not yet implemented"
+            className="flex-1 py-3 rounded-sm font-bold uppercase tracking-wider flex items-center justify-center gap-2 bg-secondary text-secondary-foreground opacity-30 cursor-not-allowed"
           >
             <Mic className="w-4 h-4" />
             TX
           </button>
         </div>
-
-        {/* TX Warning */}
-        {isTxMode && isConnected && (
-          <div className="flex items-center gap-2 p-2 bg-warning/20 border border-warning rounded-sm text-warning text-xs">
-            <AlertTriangle className="w-4 h-4" />
-            <span>TRANSMITTING - Ensure proper licensing</span>
-          </div>
-        )}
 
         {/* Start/Stop and Record */}
         <div className="flex gap-2">

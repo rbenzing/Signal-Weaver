@@ -1,73 +1,35 @@
-# Welcome to your Lovable project
+# Signal Weaver — HackRF One SDR
 
-## Project info
+Browser-based Software Defined Radio interface for the HackRF One device. Receives and demodulates FM, WFM, AM, USB, LSB, CW, and RAW signals using WebUSB + Web Audio API — no native plugins required.
 
-**URL**: https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID
+## Requirements
 
-## How can I edit this code?
+- Chrome or Edge (WebUSB support required)
+- HackRF One with WinUSB driver installed via [Zadig](https://zadig.akeo.ie/)
+- Node.js & npm
 
-There are several ways of editing your application.
-
-**Use Lovable**
-
-Simply visit the [Lovable Project](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and start prompting.
-
-Changes made via Lovable will be committed automatically to this repo.
-
-**Use your preferred IDE**
-
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
-
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
-
-Follow these steps:
+## Setup
 
 ```sh
-# Step 1: Clone the repository using the project's Git URL.
 git clone <YOUR_GIT_URL>
-
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
-
-# Step 3: Install the necessary dependencies.
-npm i
-
-# Step 4: Start the development server with auto-reloading and an instant preview.
+cd signal-weaver
+npm install
 npm run dev
 ```
 
-**Edit a file directly in GitHub**
+## Commands
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+```sh
+npm run dev        # Start dev server (Vite, port 8080)
+npm run build      # Production build
+npm run lint       # ESLint
+npm run test       # Run tests (Vitest)
+```
 
-**Use GitHub Codespaces**
+## Tech Stack
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
-
-## What technologies are used for this project?
-
-This project is built with:
-
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
-
-## How can I deploy this project?
-
-Simply open [Lovable](https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID) and click on Share -> Publish.
-
-## Can I connect a custom domain to my Lovable project?
-
-Yes, you can!
-
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
-
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+- Vite + React 18 + TypeScript 5
+- Tailwind CSS + shadcn-ui
+- WebUSB (HackRF One protocol)
+- Web Audio API (48 kHz, low-latency live playback)
+- Vitest

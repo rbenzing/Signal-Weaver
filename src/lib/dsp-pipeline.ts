@@ -19,7 +19,10 @@ import {
 
 const FFT_SIZE = 1024;
 const AUDIO_SAMPLE_RATE = 48000;
-const SAMPLES_TO_DISCARD = 100_000;
+// HackRF PLL settles within ~1-2ms of entering RX mode. 10,000 samples at
+// 8 MS/s = 1.25ms — enough to absorb DC transients without adding noticeable
+// startup delay. The old 100k value (12.5ms) was overly conservative.
+const SAMPLES_TO_DISCARD = 10_000;
 
 export class DSPPipeline implements IDSPPipeline {
   private mode: DemodMode;
@@ -68,11 +71,13 @@ export class DSPPipeline implements IDSPPipeline {
   process(rawIQ: Int8Array): DSPResult {
     const numSamples = Math.floor(rawIQ.length / 2);
 
-    // Startup discard window
-    const inWarmUp = this.samplesDiscarded < SAMPLES_TO_DISCARD;
-    if (inWarmUp) {
+    // Startup discard window — count samples and skip audio until threshold cleared.
+    // Increment BEFORE the check so the counter advances even on the crossing transfer.
+    const wasInWarmUp = this.samplesDiscarded < SAMPLES_TO_DISCARD;
+    if (wasInWarmUp) {
       this.samplesDiscarded += numSamples;
     }
+    const inWarmUp = wasInWarmUp;
 
     // Convert Int8 IQ → Float32
     if (this.iqSampleBuf.i.length < numSamples) {
